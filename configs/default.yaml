@@ -1,0 +1,182 @@
+# ============================================================
+# 交通风险感知子系统 - 系统默认配置
+# 文本驱动的交通目标检索与跨镜时空回溯
+# ============================================================
+
+# 系统配置
+system:
+  name: "TrafficSpatioTemporalBacktrack"
+  version: "1.0.0"
+  device: "cuda"                    # cuda / cpu
+  data_dir: "cityflow/AICity22_Track1_MTMC_Tracking"
+  model_dir: "models"
+  output_dir: "output"
+  log_dir: "logs"
+  log_level: "INFO"                 # DEBUG / INFO / WARNING / ERROR
+
+# 区域配置（AICity22 Track1 MTMC Tracking - Iowa, USA）
+region:
+  name: "AICity22 CityScale"        # 区域名称
+  center_lat: 42.50                 # 区域中心纬度 (Iowa area)
+  center_lon: -90.71                # 区域中心经度
+  plate_prefix: "IA"                # 车牌前缀
+  default_coordinate:               # 默认坐标（当摄像头元数据缺失时使用）
+    latitude: 42.4988
+    longitude: -90.6864
+
+# 摄像头配置
+camera:
+  metadata_file: "configs/cityflow_camera_metadata.yaml"
+  default_search_radius_km: 5.0
+  default_prefix: "c"             # 摄像头 ID 默认前缀
+  fps: 10                          # 默认帧率 (c015 为 8 FPS)
+  total_cameras: 46                # 总摄像头数
+  scenes:                          # 场景定义
+    - scene_id: "S01"
+      name: "Training Scene 1"
+      split: "train"
+      cameras: ["c001", "c002", "c003", "c004", "c005"]
+      gps_center: [42.525678, -90.723601]
+    - scene_id: "S02"
+      name: "Validation Scene 2"
+      split: "validation"
+      cameras: ["c006", "c007", "c008", "c009"]
+      gps_center: [42.491916, -90.723723]
+    - scene_id: "S03"
+      name: "Training Scene 3"
+      split: "train"
+      cameras: ["c010", "c011", "c012", "c013", "c014", "c015"]
+      gps_center: [42.498780, -90.686393]
+    - scene_id: "S04"
+      name: "Training Scene 4"
+      split: "train"
+      cameras: ["c016", "c017", "c018", "c019", "c020", "c021", "c022", "c023", "c024", "c025", "c026", "c027", "c028", "c029", "c030", "c031", "c032", "c033", "c034", "c035", "c036", "c037", "c038", "c039", "c040"]
+      gps_center: [42.498780, -90.686393]
+    - scene_id: "S05"
+      name: "Validation Scene 5"
+      split: "validation"
+      cameras: ["c016", "c010", "c017", "c018", "c019", "c020", "c021", "c022", "c023", "c024", "c025", "c026", "c027", "c028", "c029", "c033", "c034", "c035", "c036"]
+      gps_center: [42.498780, -90.686393]
+    - scene_id: "S06"
+      name: "Test Scene 6"
+      split: "test"
+      cameras: ["c041", "c042", "c043", "c044", "c045", "c046"]
+      gps_center: [42.492448, -90.723343]
+
+# 数据格式与访问方式
+data_format:
+  video_source: "vdo.avi"            # 视频文件名（每个摄像头目录下）
+  annotation_format: "mot"           # MOT标准格式: frame,id,left,top,width,height,conf,class,visibility
+  train_split: "train"               # 训练集目录
+  validation_split: "validation"     # 验证集目录
+  test_split: "test"                 # 测试集目录
+  label_files:                       # 标注文件路径模板
+    ground_truth: "{split}/{scene}/{camera}/gt/gt.txt"
+    detection: "{split}/{scene}/{camera}/det/det.txt"
+  roi_mask: "{split}/{scene}/{camera}/roi.jpg"
+  calibration: "{split}/{scene}/{camera}/calibration.txt"
+  cam_timestamp_file: "cam_timestamp/{scene}.txt"   # 每场景一个文件
+  cam_framenum_file: "cam_framenum/{scene}.txt"     # 每场景一个文件
+  cam_loc_map: "cam_loc/{scene}.png"                # 场景级地图(无per-camera GPS)
+
+# 目标检测配置
+detection:
+  model: "yolov8x"                  # ultralytics YOLO 模型名
+  confidence_threshold: 0.5
+  nms_threshold: 0.45
+  target_classes:
+    - vehicle                       # 机动车
+    - pedestrian                    # 行人
+    - non_motor_vehicle             # 非机动车
+  input_size: [640, 640]
+
+# 单摄跟踪配置
+tracking:
+  algorithm: "bytetrack"            # bytetrack / botsort / deepsort
+  max_age: 30                       # 最大丢失帧数
+  min_hits: 3                       # 最小命中帧数
+  iou_threshold: 0.3                # IOU 匹配阈值
+
+# 属性识别
+attribute:
+  vehicle_attributes:
+    - color                         # 车身颜色
+    - vehicle_type                  # 车辆类型(轿车/SUV/卡车等)
+  pedestrian_attributes:
+    - gender                        # 性别外观
+    - clothing_color                # 上衣颜色
+    - bag                           # 是否背包
+    - bag_color                     # 背包颜色
+
+# 车牌OCR
+plate_ocr:
+  enabled: true
+  model_path: null                  # null 表示使用预训练模型
+  confidence_threshold: 0.7
+
+# 特征提取
+feature:
+  reid:
+    model: "osnet_x1_0"             # torchreid 模型
+    vector_dim: 512
+    batch_size: 32
+  clip:
+    model: "CN-CLIP-ViT-L-14"      # Chinese-CLIP 模型
+    vector_dim: 768
+    batch_size: 16
+
+# 质量评分
+quality:
+  min_score: 0.3                    # 最低质量阈值
+  weights:
+    clarity: 0.3                    # 清晰度权重
+    completeness: 0.3               # 完整度权重
+    occlusion: 0.2                  # 遮挡率权重
+    detection_conf: 0.2             # 检测置信度权重
+
+# 跨镜拼接
+stitching:
+  max_time_gap_seconds: 600         # 最大时间间隔(秒)
+  min_appearance_score: 0.6         # 最低外观相似度
+  spatial_search_radius_km: 10.0    # 空间搜索半径(公里)
+  weights:
+    vehicle:
+      plate: 0.35                   # 车牌一致性
+      temporal: 0.25                # 时间可达性
+      topology: 0.15                # 摄像头拓扑
+      reid: 0.15                    # ReID 外观
+      attribute: 0.10               # 属性一致性
+    pedestrian:
+      temporal: 0.35                # 时空可达性
+      reid: 0.30                    # ReID 外观
+      attribute: 0.25               # 服饰属性
+      bag: 0.10                     # 背包属性
+  penalties:
+    path_divergence: 0.1            # 路径分叉惩罚
+    observation_missing: 0.05       # 观测缺失惩罚
+
+# 文本检索
+retrieval:
+  top_k: 20                         # 召回数量
+  vector_db: "qdrant"               # 向量数据库类型
+  qdrant:
+    host: "localhost"
+    port: 6333
+    collection_name: "traffic_targets"
+  clip_model: "CN-CLIP-ViT-L-14"
+  rerank_top_n: 5                   # 重排后返回数量
+
+# 轨迹回溯
+backtrack:
+  max_upstream_depth: 10            # 最大上游回溯深度
+  max_downstream_depth: 10          # 最大下游回溯深度
+  min_confidence_threshold: 0.5     # 最低置信度阈值
+  max_results: 50                   # 最大返回结果数
+
+# API 配置
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 2
+  cors_origins: ["*"]
+  debug: false

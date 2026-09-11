@@ -1,0 +1,49 @@
+# ============================================================
+# Docker 构建上下文排除规则
+# ============================================================
+# 目的：把模型权重与结果文件（合计约 870MB）挡在构建上下文之外。
+# 若不排除，docker build 会把整个项目目录打包发给 daemon，构建极慢且极易失败。
+#
+# 重要（与 docker-compose.yml 的约定）：
+#   models/ 与 output/ 被排除后，镜像里【不存在】模型与结果文件，
+#   必须由 compose 用 volume 挂载进容器，二者必须同时成立：
+#       ./models:/app/models     ./output:/app/output
+#   若只排除不挂载，后端 CLIP 模型加载与 FAISS 索引读取会失败并静默降级。
+# ============================================================
+
+# --- 大文件目录（必须用 volume 挂载，见上方说明）---
+models/
+output/
+docker_data/
+docker/qdrant_storage/
+
+# --- 模型权重 / 索引文件（仓库根目录另有一个 yolov8x.pt，136MB）---
+*.pt
+*.pth
+*.onnx
+*.faiss
+
+# --- 虚拟环境与各类缓存 ---
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tmp-render/
+
+# --- 版本控制与编辑器 ---
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# --- 运行日志 ---
+logs/
+*.log
+
+# --- 与运行无关的大体积文档（公安部监测服务平台操作手册.pdf，24MB）---
+*.pdf

@@ -1,0 +1,65 @@
+# ============================================================
+# 交通风险感知子系统 - 前端镜像
+# 基于 Python 3.13 slim + Streamlit
+# ============================================================
+
+FROM python:3.13-slim
+
+LABEL maintainer="Traffic Backtrack Team"
+LABEL description="交通风险感知子系统 - Streamlit 前端"
+
+# 设置环境变量
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+# 设置工作目录
+WORKDIR /app
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装前端 Python 依赖
+RUN pip install --no-cache-dir \
+        streamlit \
+        streamlit-folium \
+        pydeck \
+        plotly \
+        folium \
+        requests \
+        pandas \
+        numpy \
+        Pillow
+
+# frontend/utils.py 顶层无条件 import torch / yaml（第 17、20 行），
+# 缺少任一包都会导致容器启动即 ImportError，整个前端无法访问，因此必须安装。
+# 前端服务在 compose 中未申请 GPU，本地兜底打分走 CPU，故装 CPU 版 torch 以控制镜像体积。
+# transformers（BLIP 精排）仅在 frontend/utils.py 的函数内部 import 且被 try/except 包裹，
+# 缺失只会降级不影响启动，故不在此安装。
+RUN pip install --no-cache-dir PyYAML && \
+    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# 复制前端代码和项目公共模块
+COPY frontend/ ./frontend/
+COPY src/ ./src/
+COPY configs/ ./configs/
+
+# 创建数据卷挂载点
+# 与后端同理：必须在 /app 下，因为 frontend/utils.py 以 _PROJECT_ROOT=/app 解析 output/；
+# docker-compose.yml 中前端服务的 volume 目标路径与此一致。
+# output/ 被 .dockerignore 排除，镜像内为空目录，内容来自 compose 的 volume 挂载。
+RUN mkdir -p /app/data /app/output
+VOLUME ["/app/data", "/app/output"]
+
+# 暴露端口
+EXPOSE 8501
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8501/_stcore/health || exit 1
+
+# 启动 Streamlit（使用 app.py 作为入口，包含首页导航）
+# --server.headless=true：容器内非交互终端，避免首次启动时等待邮箱输入而卡住
+CMD ["streamlit", "run", "frontend/app.py", "--server.port", "8501", "--server.address", "0.0.0.0", "--server.headless=true"]

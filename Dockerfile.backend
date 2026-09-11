@@ -1,0 +1,55 @@
+# ============================================================
+# 交通风险感知子系统 - 后端 API 镜像
+# 基于 PyTorch + CUDA 12.8 运行时
+# ============================================================
+
+FROM pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime
+
+LABEL maintainer="Traffic Backtrack Team"
+LABEL description="交通风险感知子系统 - 后端 API 服务"
+
+# 设置环境变量
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    CUDA_VISIBLE_DEVICES=0
+
+# 设置工作目录
+WORKDIR /app
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1-mesa-glx \
+        libglib2.0-0 \
+        ffmpeg \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制并安装 Python 依赖
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir uvicorn python-multipart aiofiles
+
+# 复制项目代码
+COPY . .
+
+# 创建数据卷挂载点
+# 注意：必须建在 /app 下（而不是 /data、/models 这类根目录），
+# 因为后端代码以项目根 _PROJECT_ROOT=/app 拼接路径：
+#   api/routes/search.py -> /app/output、/app/models
+#   src/common/logger.py -> /app/logs
+# docker-compose.yml 里的 volume 目标路径与此保持一致。
+# models/ 与 output/ 被 .dockerignore 排除，镜像内这两个目录为空，
+# 内容全部来自 compose 的 volume 挂载。
+RUN mkdir -p /app/data /app/models /app/output /app/logs
+VOLUME ["/app/data", "/app/models", "/app/output", "/app/logs"]
+
+# 暴露端口
+EXPOSE 8000
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# 启动 FastAPI 服务
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

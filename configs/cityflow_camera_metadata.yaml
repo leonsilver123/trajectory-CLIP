@@ -1,0 +1,917 @@
+# ============================================================
+# CityFlow 摄像头元数据配置 (自动生成)
+# 共 46 个摄像头
+# 坐标已转换至苏州仿真区域 (原数据为美国Iowa坐标)
+# ============================================================
+
+cameras:
+- camera_id: c001
+  name: Scene01-Camera01
+  latitude: 31.326
+  longitude: 120.5764
+  direction: 0.0
+  covered_road_segment: SEG_S01_001
+  lane_direction: northbound
+  scene: S01
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 1955
+  start_timestamp_sec: 0
+- camera_id: c002
+  name: Scene01-Camera02
+  latitude: 31.3258
+  longitude: 120.5768
+  direction: 90.0
+  covered_road_segment: SEG_S01_001
+  lane_direction: eastbound
+  scene: S01
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2110
+  start_timestamp_sec: 1.64
+- camera_id: c003
+  name: Scene01-Camera03
+  latitude: 31.3254
+  longitude: 120.5766
+  direction: 180.0
+  covered_road_segment: SEG_S01_001
+  lane_direction: southbound
+  scene: S01
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 1996
+  start_timestamp_sec: 2.049
+- camera_id: c004
+  name: Scene01-Camera04
+  latitude: 31.3254
+  longitude: 120.5762
+  direction: 270.0
+  covered_road_segment: SEG_S01_001
+  lane_direction: westbound
+  scene: S01
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2110
+  start_timestamp_sec: 2.177
+- camera_id: c005
+  name: Scene01-Camera05
+  latitude: 31.3258
+  longitude: 120.576
+  direction: 0.0
+  covered_road_segment: SEG_S01_001
+  lane_direction: northbound
+  scene: S01
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2110
+  start_timestamp_sec: 2.235
+- camera_id: c006
+  name: Scene02-Camera01
+  latitude: 31.2922
+  longitude: 120.5763
+  direction: 0.0
+  covered_road_segment: SEG_S02_001
+  lane_direction: northbound
+  scene: S02
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2110
+  start_timestamp_sec: 0
+- camera_id: c007
+  name: Scene02-Camera02
+  latitude: 31.2919
+  longitude: 120.5767
+  direction: 90.0
+  covered_road_segment: SEG_S02_001
+  lane_direction: eastbound
+  scene: S02
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 1965
+  start_timestamp_sec: 0.061
+- camera_id: c008
+  name: Scene02-Camera03
+  latitude: 31.2916
+  longitude: 120.5763
+  direction: 180.0
+  covered_road_segment: SEG_S02_001
+  lane_direction: southbound
+  scene: S02
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 1924
+  start_timestamp_sec: 0.421
+- camera_id: c009
+  name: Scene02-Camera04
+  latitude: 31.2919
+  longitude: 120.5759
+  direction: 270.0
+  covered_road_segment: SEG_S02_001
+  lane_direction: westbound
+  scene: S02
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2110
+  start_timestamp_sec: 0.66
+- camera_id: c010
+  name: Scene03-Camera01
+  latitude: 31.2988
+  longitude: 120.6126
+  direction: 0.0
+  covered_road_segment: SEG_S03_001
+  lane_direction: northbound
+  scene: S03
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2141
+  start_timestamp_sec: 8.715
+- camera_id: c011
+  name: Scene03-Camera02
+  latitude: 31.2989
+  longitude: 120.613
+  direction: 90.0
+  covered_road_segment: SEG_S03_001
+  lane_direction: eastbound
+  scene: S03
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2279
+  start_timestamp_sec: 8.457
+- camera_id: c012
+  name: Scene03-Camera03
+  latitude: 31.2988
+  longitude: 120.6134
+  direction: 180.0
+  covered_road_segment: SEG_S03_002
+  lane_direction: southbound
+  scene: S03
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2422
+  start_timestamp_sec: 5.879
+- camera_id: c013
+  name: Scene03-Camera04
+  latitude: 31.2989
+  longitude: 120.6138
+  direction: 270.0
+  covered_road_segment: SEG_S03_002
+  lane_direction: westbound
+  scene: S03
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2415
+  start_timestamp_sec: 0
+- camera_id: c014
+  name: Scene03-Camera05
+  latitude: 31.2988
+  longitude: 120.6142
+  direction: 0.0
+  covered_road_segment: SEG_S03_003
+  lane_direction: northbound
+  scene: S03
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2332
+  start_timestamp_sec: 5.042
+- camera_id: c015
+  name: Scene03-Camera06
+  latitude: 31.2989
+  longitude: 120.6146
+  direction: 90.0
+  covered_road_segment: SEG_S03_003
+  lane_direction: eastbound
+  scene: S03
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 1928
+  start_timestamp_sec: 8.492
+- camera_id: c016
+  name: Scene04-Camera01
+  latitude: 31.2978
+  longitude: 120.6126
+  direction: 0.0
+  covered_road_segment: SEG_S04_R0
+  lane_direction: northbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 310
+  start_timestamp_sec: 0
+- camera_id: c017
+  name: Scene04-Camera02
+  latitude: 31.2978
+  longitude: 120.6131
+  direction: 90.0
+  covered_road_segment: SEG_S04_R0
+  lane_direction: eastbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 281
+  start_timestamp_sec: 14.318
+- camera_id: c018
+  name: Scene04-Camera03
+  latitude: 31.2978
+  longitude: 120.6136
+  direction: 180.0
+  covered_road_segment: SEG_S04_R0
+  lane_direction: southbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 418
+  start_timestamp_sec: 29.955
+- camera_id: c019
+  name: Scene04-Camera04
+  latitude: 31.2978
+  longitude: 120.6141
+  direction: 270.0
+  covered_road_segment: SEG_S04_R0
+  lane_direction: westbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 460
+  start_timestamp_sec: 26.979
+- camera_id: c020
+  name: Scene04-Camera05
+  latitude: 31.2978
+  longitude: 120.6146
+  direction: 0.0
+  covered_road_segment: SEG_S04_R0
+  lane_direction: northbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 473
+  start_timestamp_sec: 25.905
+- camera_id: c021
+  name: Scene04-Camera06
+  latitude: 31.2983
+  longitude: 120.6126
+  direction: 90.0
+  covered_road_segment: SEG_S04_R1
+  lane_direction: eastbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 310
+  start_timestamp_sec: 39.973
+- camera_id: c022
+  name: Scene04-Camera07
+  latitude: 31.2983
+  longitude: 120.6131
+  direction: 180.0
+  covered_road_segment: SEG_S04_R1
+  lane_direction: southbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 310
+  start_timestamp_sec: 49.422
+- camera_id: c023
+  name: Scene04-Camera08
+  latitude: 31.2983
+  longitude: 120.6136
+  direction: 270.0
+  covered_road_segment: SEG_S04_R1
+  lane_direction: westbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 609
+  start_timestamp_sec: 45.716
+- camera_id: c024
+  name: Scene04-Camera09
+  latitude: 31.2983
+  longitude: 120.6141
+  direction: 0.0
+  covered_road_segment: SEG_S04_R1
+  lane_direction: northbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 550
+  start_timestamp_sec: 50.853
+- camera_id: c025
+  name: Scene04-Camera10
+  latitude: 31.2983
+  longitude: 120.6146
+  direction: 90.0
+  covered_road_segment: SEG_S04_R1
+  lane_direction: eastbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 559
+  start_timestamp_sec: 50.263
+- camera_id: c026
+  name: Scene04-Camera11
+  latitude: 31.2988
+  longitude: 120.6126
+  direction: 180.0
+  covered_road_segment: SEG_S04_R2
+  lane_direction: southbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 710
+  start_timestamp_sec: 70.45
+- camera_id: c027
+  name: Scene04-Camera12
+  latitude: 31.2988
+  longitude: 120.6131
+  direction: 270.0
+  covered_road_segment: SEG_S04_R2
+  lane_direction: westbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 365
+  start_timestamp_sec: 85.097
+- camera_id: c028
+  name: Scene04-Camera13
+  latitude: 31.2988
+  longitude: 120.6136
+  direction: 0.0
+  covered_road_segment: SEG_S04_R2
+  lane_direction: northbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 260
+  start_timestamp_sec: 100.11
+- camera_id: c029
+  name: Scene04-Camera14
+  latitude: 31.2988
+  longitude: 120.6141
+  direction: 90.0
+  covered_road_segment: SEG_S04_R2
+  lane_direction: eastbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 260
+  start_timestamp_sec: 125.788
+- camera_id: c030
+  name: Scene04-Camera15
+  latitude: 31.2988
+  longitude: 120.6146
+  direction: 180.0
+  covered_road_segment: SEG_S04_R2
+  lane_direction: southbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 632
+  start_timestamp_sec: 124.319
+- camera_id: c031
+  name: Scene04-Camera16
+  latitude: 31.2993
+  longitude: 120.6126
+  direction: 270.0
+  covered_road_segment: SEG_S04_R3
+  lane_direction: westbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 656
+  start_timestamp_sec: 125.033
+- camera_id: c032
+  name: Scene04-Camera17
+  latitude: 31.2993
+  longitude: 120.6131
+  direction: 0.0
+  covered_road_segment: SEG_S04_R3
+  lane_direction: northbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 625
+  start_timestamp_sec: 125.199
+- camera_id: c033
+  name: Scene04-Camera18
+  latitude: 31.2993
+  longitude: 120.6136
+  direction: 90.0
+  covered_road_segment: SEG_S04_R3
+  lane_direction: eastbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 350
+  start_timestamp_sec: 150.893
+- camera_id: c034
+  name: Scene04-Camera19
+  latitude: 31.2993
+  longitude: 120.6141
+  direction: 180.0
+  covered_road_segment: SEG_S04_R3
+  lane_direction: southbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 410
+  start_timestamp_sec: 140.218
+- camera_id: c035
+  name: Scene04-Camera20
+  latitude: 31.2993
+  longitude: 120.6146
+  direction: 270.0
+  covered_road_segment: SEG_S04_R3
+  lane_direction: westbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 210
+  start_timestamp_sec: 165.568
+- camera_id: c036
+  name: Scene04-Camera21
+  latitude: 31.2998
+  longitude: 120.6126
+  direction: 0.0
+  covered_road_segment: SEG_S04_R4
+  lane_direction: northbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 360
+  start_timestamp_sec: 170.797
+- camera_id: c037
+  name: Scene04-Camera22
+  latitude: 31.2998
+  longitude: 120.6131
+  direction: 90.0
+  covered_road_segment: SEG_S04_R4
+  lane_direction: eastbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 299
+  start_timestamp_sec: 170.567
+- camera_id: c038
+  name: Scene04-Camera23
+  latitude: 31.2998
+  longitude: 120.6136
+  direction: 180.0
+  covered_road_segment: SEG_S04_R4
+  lane_direction: southbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 457
+  start_timestamp_sec: 175.426
+- camera_id: c039
+  name: Scene04-Camera24
+  latitude: 31.2998
+  longitude: 120.6141
+  direction: 270.0
+  covered_road_segment: SEG_S04_R4
+  lane_direction: westbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 452
+  start_timestamp_sec: 175.644
+- camera_id: c040
+  name: Scene04-Camera25
+  latitude: 31.2998
+  longitude: 120.6146
+  direction: 0.0
+  covered_road_segment: SEG_S04_R4
+  lane_direction: northbound
+  scene: S04
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 454
+  start_timestamp_sec: 175.838
+- camera_id: c041
+  name: Scene06-Camera01
+  latitude: 31.2927
+  longitude: 120.5767
+  direction: 0.0
+  covered_road_segment: SEG_S06_001
+  lane_direction: northbound
+  scene: S06
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2000
+  start_timestamp_sec: 0
+- camera_id: c042
+  name: Scene06-Camera02
+  latitude: 31.2926
+  longitude: 120.577
+  direction: 90.0
+  covered_road_segment: SEG_S06_001
+  lane_direction: eastbound
+  scene: S06
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2000
+  start_timestamp_sec: 0
+- camera_id: c043
+  name: Scene06-Camera03
+  latitude: 31.2923
+  longitude: 120.577
+  direction: 180.0
+  covered_road_segment: SEG_S06_001
+  lane_direction: southbound
+  scene: S06
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2000
+  start_timestamp_sec: 0
+- camera_id: c044
+  name: Scene06-Camera04
+  latitude: 31.2921
+  longitude: 120.5767
+  direction: 270.0
+  covered_road_segment: SEG_S06_001
+  lane_direction: westbound
+  scene: S06
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2000
+  start_timestamp_sec: 0
+- camera_id: c045
+  name: Scene06-Camera05
+  latitude: 31.2923
+  longitude: 120.5763
+  direction: 0.0
+  covered_road_segment: SEG_S06_001
+  lane_direction: northbound
+  scene: S06
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2000
+  start_timestamp_sec: 0
+- camera_id: c046
+  name: Scene06-Camera06
+  latitude: 31.2926
+  longitude: 120.5763
+  direction: 90.0
+  covered_road_segment: SEG_S06_001
+  lane_direction: eastbound
+  scene: S06
+  fps: 10
+  resolution: 1920x1080
+  num_frames: 2000
+  start_timestamp_sec: 0
+road_segments:
+- segment_id: SEG_S01_001
+  name: S01 Intersection Segment 1
+  start_camera_ids:
+  - c001
+  end_camera_ids:
+  - c002
+  distance_meters: 50.0
+  direction: east-west
+- segment_id: SEG_S02_001
+  name: S02 Intersection Segment 1
+  start_camera_ids:
+  - c006
+  end_camera_ids:
+  - c007
+  distance_meters: 50.0
+  direction: east-west
+- segment_id: SEG_S03_001
+  name: S03 Road Segment 1
+  start_camera_ids:
+  - c010
+  end_camera_ids:
+  - c011
+  distance_meters: 34.6
+  direction: east-west
+- segment_id: SEG_S03_002
+  name: S03 Road Segment 2
+  start_camera_ids:
+  - c012
+  end_camera_ids:
+  - c013
+  distance_meters: 34.6
+  direction: east-west
+- segment_id: SEG_S03_003
+  name: S03 Road Segment 3
+  start_camera_ids:
+  - c014
+  end_camera_ids:
+  - c015
+  distance_meters: 34.6
+  direction: east-west
+- segment_id: SEG_S04_R0
+  name: S04 Grid Row 0
+  start_camera_ids:
+  - c016
+  end_camera_ids:
+  - c020
+  distance_meters: 164.0
+  direction: east-west
+- segment_id: SEG_S04_R1
+  name: S04 Grid Row 1
+  start_camera_ids:
+  - c021
+  end_camera_ids:
+  - c025
+  distance_meters: 164.0
+  direction: east-west
+- segment_id: SEG_S04_R2
+  name: S04 Grid Row 2
+  start_camera_ids:
+  - c026
+  end_camera_ids:
+  - c030
+  distance_meters: 164.0
+  direction: east-west
+- segment_id: SEG_S04_R3
+  name: S04 Grid Row 3
+  start_camera_ids:
+  - c031
+  end_camera_ids:
+  - c035
+  distance_meters: 164.0
+  direction: east-west
+- segment_id: SEG_S04_R4
+  name: S04 Grid Row 4
+  start_camera_ids:
+  - c036
+  end_camera_ids:
+  - c040
+  distance_meters: 164.0
+  direction: east-west
+- segment_id: SEG_S04_C0
+  name: S04 Grid Col 0
+  start_camera_ids:
+  - c016
+  end_camera_ids:
+  - c036
+  distance_meters: 222.4
+  direction: north-south
+- segment_id: SEG_S04_C1
+  name: S04 Grid Col 1
+  start_camera_ids:
+  - c017
+  end_camera_ids:
+  - c037
+  distance_meters: 222.4
+  direction: north-south
+- segment_id: SEG_S04_C2
+  name: S04 Grid Col 2
+  start_camera_ids:
+  - c018
+  end_camera_ids:
+  - c038
+  distance_meters: 222.4
+  direction: north-south
+- segment_id: SEG_S04_C3
+  name: S04 Grid Col 3
+  start_camera_ids:
+  - c019
+  end_camera_ids:
+  - c039
+  distance_meters: 222.4
+  direction: north-south
+- segment_id: SEG_S04_C4
+  name: S04 Grid Col 4
+  start_camera_ids:
+  - c020
+  end_camera_ids:
+  - c040
+  distance_meters: 222.4
+  direction: north-south
+- segment_id: SEG_S06_001
+  name: S06 Intersection Segment 1
+  start_camera_ids:
+  - c041
+  end_camera_ids:
+  - c042
+  distance_meters: 50.0
+  direction: east-west
+adjacency:
+  c001:
+  - c002
+  - c003
+  - c004
+  - c005
+  c002:
+  - c001
+  - c003
+  - c004
+  - c005
+  c003:
+  - c001
+  - c002
+  - c004
+  - c005
+  - c006
+  - c007
+  c004:
+  - c001
+  - c002
+  - c003
+  - c005
+  - c006
+  c005:
+  - c001
+  - c002
+  - c003
+  - c004
+  c006:
+  - c003
+  - c004
+  - c007
+  - c008
+  - c009
+  - c010
+  - c044
+  - c045
+  c007:
+  - c003
+  - c006
+  - c008
+  - c009
+  - c010
+  - c011
+  - c044
+  c008:
+  - c006
+  - c007
+  - c009
+  c009:
+  - c006
+  - c007
+  - c008
+  c010:
+  - c006
+  - c007
+  - c011
+  - c016
+  c011:
+  - c007
+  - c010
+  - c012
+  - c017
+  c012:
+  - c011
+  - c013
+  - c018
+  c013:
+  - c012
+  - c014
+  - c019
+  c014:
+  - c013
+  - c015
+  - c020
+  c015:
+  - c014
+  - c021
+  c016:
+  - c010
+  - c017
+  - c021
+  c017:
+  - c011
+  - c016
+  - c018
+  - c022
+  c018:
+  - c012
+  - c017
+  - c019
+  - c023
+  c019:
+  - c013
+  - c018
+  - c020
+  - c024
+  c020:
+  - c014
+  - c019
+  - c025
+  c021:
+  - c015
+  - c016
+  - c022
+  - c026
+  c022:
+  - c017
+  - c021
+  - c023
+  - c027
+  c023:
+  - c018
+  - c022
+  - c024
+  - c028
+  c024:
+  - c019
+  - c023
+  - c025
+  - c029
+  c025:
+  - c020
+  - c024
+  - c030
+  c026:
+  - c021
+  - c027
+  - c031
+  c027:
+  - c022
+  - c026
+  - c028
+  - c032
+  c028:
+  - c023
+  - c027
+  - c029
+  - c033
+  c029:
+  - c024
+  - c028
+  - c030
+  - c034
+  c030:
+  - c025
+  - c029
+  - c035
+  c031:
+  - c026
+  - c032
+  - c036
+  c032:
+  - c027
+  - c031
+  - c033
+  - c037
+  c033:
+  - c028
+  - c032
+  - c034
+  - c038
+  c034:
+  - c029
+  - c033
+  - c035
+  - c039
+  c035:
+  - c030
+  - c034
+  - c040
+  c036:
+  - c031
+  - c037
+  c037:
+  - c032
+  - c036
+  - c038
+  c038:
+  - c033
+  - c037
+  - c039
+  c039:
+  - c034
+  - c038
+  - c040
+  c040:
+  - c035
+  - c039
+  c041:
+  - c042
+  - c043
+  - c044
+  - c045
+  - c046
+  c042:
+  - c041
+  - c043
+  - c044
+  - c045
+  - c046
+  c043:
+  - c041
+  - c042
+  - c044
+  - c045
+  - c046
+  c044:
+  - c006
+  - c007
+  - c041
+  - c042
+  - c043
+  - c045
+  - c046
+  c045:
+  - c006
+  - c041
+  - c042
+  - c043
+  - c044
+  - c046
+  c046:
+  - c041
+  - c042
+  - c043
+  - c044
+  - c045

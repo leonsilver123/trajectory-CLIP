@@ -1,0 +1,81 @@
+# ============================================================
+# 交通风险感知子系统 — Git 忽略规则
+# 大文件（模型权重、索引、抽取帧/裁剪图）一律不进仓库。
+# ============================================================
+
+# ---------- 模型权重 ----------
+models/
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.bin
+
+# ---------- 数据产物（大） ----------
+output/
+data/
+docker_data/
+logs/
+*.faiss
+*.pkl
+*.h5
+*.parquet
+*.sqlite
+*.sqlite3
+*.db
+
+# ---------- 数据集（极大：含 AICity / VisDrone 的 zip 与解包内容） ----------
+cityflow/
+
+# ---------- Qdrant 向量库持久化目录（461MB 历史数据） ----------
+# 注意：docker/ 下的 init_qdrant.py、nginx.conf 是源码，必须保留，
+# 所以这里只排除 storage 子目录，不能整目录排除 docker/。
+docker/qdrant_storage/
+
+# 单文件大结果（107MB）
+cityflow_results.json
+results.json
+
+# ---------- 虚拟环境 ----------
+.venv/
+venv/
+env/
+ENV/
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# ---------- 测试与缓存 ----------
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# ---------- 前端 / 临时渲染 ----------
+.tmp-render/
+node_modules/
+.streamlit/secrets.toml
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---------- 运行日志与临时文件 ----------
+*.log
+*.tmp
+frontend_start_err.txt
+frontend_start_out.txt

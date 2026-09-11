@@ -1,0 +1,124 @@
+# ============================================================
+# 交通风险感知子系统 - Docker Compose 服务编排
+# ============================================================
+# 使用方式：在项目根目录执行 `docker compose up -d`
+# 所有 volume 均使用相对路径，相对本文件所在目录（项目根）解析，
+# 因此换机器/换盘符无需修改任何路径。
+# ============================================================
+
+services:
+  # ----------------------------------------------------------
+  # 后端 API 服务 (FastAPI + CUDA)
+  # ----------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: traffic-backtrack-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # 挂载点必须是容器内的 /app/xxx，不能是 /xxx：
+      # 后端代码统一以“项目根目录”解析路径 ——
+      #   api/routes/search.py:  _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent (= /app)
+      #                          _OUTPUT_DIR = /app/output, CLIP 模型 download_root = /app/models
+      #   api/main.py:           静态目录 /static -> /app/output
+      #   src/common/logger.py:  log_dir 默认 "logs"（相对工作目录 WORKDIR=/app）-> /app/logs
+      #   configs/default.yaml:  data_dir/model_dir/output_dir/log_dir 均为相对项目根路径
+      # 若挂到 /models、/output 这类根目录，容器内代码读不到，检索功能会静默退化。
+      - ./data:/app/data        # 数据集目录（仓库内已存在）
+      - ./models:/app/models    # 模型权重（~870MB，被 .dockerignore 排除，只能靠 volume 挂载）
+      - ./output:/app/output    # 检索结果 JSON + FAISS 索引（~250MB，同样只靠 volume 挂载）
+      - ./logs:/app/logs        # 运行日志（仓库内已存在，日志文件由容器运行时写入）
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - PYTHONPATH=/app
+    env_file:
+      # 依赖仓库内已存在的 docker/.env；缺失时 compose 会直接报错
+      - docker/.env
+    depends_on:
+      qdrant:
+        condition: service_started
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    restart: unless-stopped
+    networks:
+      - traffic-net
+
+  # ----------------------------------------------------------
+  # 前端服务 (Streamlit)
+  # ----------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: traffic-backtrack-frontend
+    ports:
+      - "8501:8501"
+    volumes:
+      # 前端除了调用后端 API，在 API 不可用时还会直接读本地结果文件做兜底：
+      #   frontend/utils.py: _PROJECT_ROOT = Path(__file__).parent.parent (= /app), _OUTPUT_DIR = /app/output
+      #   frontend/home.py:  /app/output/cityflow_results.json
+      # 所以同样必须挂到 /app/output（不是 /output）。
+      - ./data:/app/data
+      - ./output:/app/output
+    environment:
+      - API_BASE_URL=http://backend:8000
+      - QDRANT_URL=http://qdrant:6333
+    env_file:
+      - docker/.env
+    depends_on:
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    restart: unless-stopped
+    networks:
+      - traffic-net
+
+  # ----------------------------------------------------------
+  # Qdrant 向量数据库
+  # ----------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: traffic-backtrack-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      # 说明：仓库里已存在 docker/qdrant_storage（约 461MB 历史向量数据），
+      # 原先配置指向的 docker_data/qdrant 并不存在，故这里指向已存在的数据目录，
+      # 既复用了已有 collection，也避免新建重复目录。
+      # 若目录不存在，Docker 会自动创建（Linux 上属主为 root，必要时手动 mkdir/chown）。
+      - ./docker/qdrant_storage:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    restart: unless-stopped
+    networks:
+      - traffic-net
+
+# ----------------------------------------------------------
+# 网络
+# ----------------------------------------------------------
+networks:
+  traffic-net:
+    driver: bridge
