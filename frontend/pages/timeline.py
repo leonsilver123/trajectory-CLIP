@@ -17,7 +17,7 @@ from frontend.utils import (
     type_label, get_target_type_icon, resolve_image_path,
     get_no_image_placeholder,
     confidence_color, confidence_label,
-    CAMERA_NAME_MAP,
+    CAMERA_NAME_MAP, format_number,
 )
 
 
@@ -488,7 +488,7 @@ def _render_horizontal_timeline(obs_nodes, obs_segs, selected_idx):
                     )
                 st.markdown(
                     f'<div style="text-align:center;font-size:10px;font-weight:600;'
-                    f'color:{conf_hex};">{conf:.0%}</div>',
+                    f'color:{conf_hex};">{format_number(conf, ".0%")}</div>',
                     unsafe_allow_html=True,
                 )
                 if mark_text:
@@ -590,7 +590,7 @@ def _render_node_detail(obs_nodes, obs_segs, inf_segs, idx):
                 <span class="tl-detail-label">进入描述：</span>{entry_desc}<br>
                 <span class="tl-detail-label">离开描述：</span>{exit_desc}<br>
                 <span class="tl-detail-label">置信度：</span>
-                <span style="color:{conf_hex};font-weight:600;">{conf:.1%}</span>
+                <span style="color:{conf_hex};font-weight:600;">{format_number(conf, ".1%")}</span>
                 &nbsp;({confidence_label(conf)})
             </div>
         </div>
@@ -607,8 +607,8 @@ def _render_node_detail(obs_nodes, obs_segs, inf_segs, idx):
                     padding:8px 12px;margin-top:6px;font-size:12px;">
             <strong style="color:#F59E0B;">[→] 下一段为推断行驶</strong><br>
             {_html.escape(str(CAMERA_NAME_MAP.get(inf.get('source_camera_id', ''), inf.get('source_camera_name', ''))))} → {_html.escape(str(CAMERA_NAME_MAP.get(inf.get('target_camera_id', ''), inf.get('target_camera_name', ''))))}
-            &nbsp;|&nbsp; 置信度: <span style="color:{inf_hex};font-weight:600;">{inf_conf:.1%}</span>
-            &nbsp;|&nbsp; 预估行驶时间: {est_t:.0f}秒
+            &nbsp;|&nbsp; 置信度: <span style="color:{inf_hex};font-weight:600;">{format_number(inf_conf, ".1%")}</span>
+            &nbsp;|&nbsp; 预估行驶时间: {format_number(est_t, ".0f", "秒")}
         </div>
         """, unsafe_allow_html=True)
 

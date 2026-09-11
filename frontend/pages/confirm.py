@@ -19,7 +19,7 @@ from frontend.utils import (
     api_confirm, api_backtrack, api_trajectory, _convert_trajectory_response,
     type_label, get_target_type_icon, format_attributes,
     resolve_image_path, get_no_image_placeholder,
-    confidence_color, confidence_label,
+    confidence_color, confidence_label, format_number,
 )
 from frontend.styles import Colors
 
@@ -686,7 +686,7 @@ def _render_middle_panel(candidates: List[Dict], selected_idx: int,
                 if status_html:
                     st.markdown(status_html, unsafe_allow_html=True)
             st.caption(f"{_html.escape(str(color))} | {_html.escape(str(camera_name))} | {_html.escape(str(ts))}")
-            st.markdown(f'<div class="cc-score">相似度 {score:.1%}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="cc-score">相似度 {format_number(score, ".1%")}</div>', unsafe_allow_html=True)
 
         if multi_select:
             # 多选模式：只显示复选框

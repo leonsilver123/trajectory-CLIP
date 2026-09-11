@@ -181,10 +181,66 @@ def test_frontend_imports() -> None:
             _record(f"compile {rel}", False, f"{e.__class__.__name__}: {e}")
 
 
+def test_frontend_runtime(port: int = 8501) -> None:
+    """真实拉起 Streamlit 前端并探活（不是只做 import/compile 检查）。
+
+    以子进程方式启动 frontend/app.py，轮询 Streamlit 自带健康端点 /_stcore/health，
+    无论成败都会回收子进程。
+    """
+    import subprocess
+    import time
+
+    print(f"\n[9] 前端运行时  streamlit run frontend/app.py (:{port})")
+    app_path = _PROJECT_ROOT / "frontend" / "app.py"
+    if not app_path.exists():
+        _record("streamlit 启动", False, f"入口不存在: {app_path}")
+        return
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "streamlit", "run", str(app_path),
+         "--server.port", str(port), "--server.headless=true",
+         "--server.address", "127.0.0.1"],
+        cwd=str(_PROJECT_ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    healthy = False
+    detail = ""
+    try:
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                detail = f"进程提前退出 (code={proc.returncode})"
+                break
+            try:
+                r = requests.get(f"http://127.0.0.1:{port}/_stcore/health", timeout=5)
+                if r.status_code == 200:
+                    healthy = True
+                    detail = f"/_stcore/health -> 200 {r.text.strip()[:40]}"
+                    break
+            except Exception:
+                pass
+            time.sleep(3)
+        else:
+            detail = "120 秒内未就绪"
+    finally:
+        try:
+            proc.terminate()
+            proc.wait(timeout=20)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    _record("streamlit 启动并响应健康检查", healthy, detail)
+
+
 def main() -> int:
     """入口：跑全部冒烟项并打印汇总"""
     parser = argparse.ArgumentParser(description="前后端冒烟测试")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--frontend", action="store_true",
+                        help="额外真实拉起 Streamlit 前端做运行时探活（较慢）")
+    parser.add_argument("--frontend-port", type=int, default=8501)
     args = parser.parse_args()
     base = args.base_url.rstrip("/")
 
@@ -211,6 +267,8 @@ def main() -> int:
     test_backtrack_trace(base, instance_id)
     test_dashboard(base)
     test_frontend_imports()
+    if args.frontend:
+        test_frontend_runtime(args.frontend_port)
 
     passed = sum(1 for _, ok, _ in _RESULTS if ok)
     failed = [(n, d) for n, ok, d in _RESULTS if not ok]

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import numbers
 import os
 from datetime import datetime
 from pathlib import Path
@@ -268,6 +269,48 @@ def api_camera_list() -> Optional[List[Dict[str, Any]]]:
 
 
 # ============================================================
+# 数值安全格式化（None 兜底）
+# ============================================================
+# 背景：后端在「无真实依据」时会如实返回 null。例如两侧观测时间窗口重叠时，
+# inference_segments[].actual_travel_time 就是 null（此时实际行程时间无法确定）。
+# 这类字段不能直接用 dict.get(k, 0) 兜底——键存在、值为 None，取出来仍是 None，
+# 直接 f"{v:.0f}" 会抛 TypeError: unsupported format string passed to NoneType.__format__。
+# 下面两个函数在展示层统一兜底：缺依据时显示占位符，而不是编造一个 0。
+
+
+def is_number(value: Any) -> bool:
+    """判断是否为可用于格式化/比较的实数。
+
+    用 numbers.Real 而不是 (int, float)：numpy 标量（如 np.int64）不是内置 int 的子类，
+    但已注册到 numbers.Real；bool 是 int 子类，需要显式排除。
+    """
+    return isinstance(value, numbers.Real) and not isinstance(value, bool)
+
+
+def safe_number(value: Any, default: float = 0.0) -> float:
+    """把可能为 None / 非数值的字段安全转成 float。
+
+    仅用于「聚合求和」与「阈值比较」这类必须有数值的场合；
+    纯展示场景请用 format_number()，以免把「无依据」显示成 0。
+    """
+    return float(value) if is_number(value) else default
+
+
+def format_number(value: Any, spec: str = ".0f", unit: str = "", fallback: str = "--") -> str:
+    """格式化可空数值字段；缺依据（None / 非数值）时返回占位符。
+
+    参数:
+        value: 原始字段值，可能为 None
+        spec:  Python 格式说明符，如 ".0f" / ".0%" / ".1%"
+        unit:  单位后缀，如 "秒" / "m"
+        fallback: 缺依据时的占位文案
+    """
+    if not is_number(value):
+        return fallback
+    return f"{value:{spec}}{unit}"
+
+
+# ============================================================
 # 颜色映射工具
 # ============================================================
 
@@ -294,11 +337,14 @@ CONFIDENCE_COLORS = {
     "high": "#28A745",    # > 0.7  状态绿
     "medium": "#F5A623",  # 0.4 - 0.7  警示黄
     "low": "#DC3545",     # < 0.4  危险红
+    "unknown": "#98A2B3",  # 无真实依据（后端如实返回 None），中性灰
 }
 
 
-def confidence_color(score: float) -> str:
-    """根据置信度返回颜色"""
+def confidence_color(score: Any) -> str:
+    """根据置信度返回颜色；无真实依据时返回中性灰，不冒充「低置信度」"""
+    if not is_number(score):
+        return CONFIDENCE_COLORS["unknown"]
     if score >= 0.7:
         return CONFIDENCE_COLORS["high"]
     elif score >= 0.4:
@@ -306,8 +352,10 @@ def confidence_color(score: float) -> str:
     return CONFIDENCE_COLORS["low"]
 
 
-def confidence_label(score: float) -> str:
-    """根据置信度返回标签"""
+def confidence_label(score: Any) -> str:
+    """根据置信度返回标签；无真实依据时返回「未知」，不冒充「低」"""
+    if not is_number(score):
+        return "未知"
     if score >= 0.7:
         return "高"
     elif score >= 0.4:

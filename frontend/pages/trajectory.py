@@ -19,6 +19,7 @@ import streamlit as st
 from frontend.utils import (
     confidence_color, confidence_label, type_label,
     get_target_type_icon, CAMERA_NAME_MAP, resolve_image_path,
+    is_number, safe_number, format_number,
 )
 from frontend.components import render_icon
 from frontend.components.map_view import render_trajectory_plot
@@ -408,7 +409,8 @@ def _render_overview_card(target, overall_conf, obs_nodes, obs_segs, inf_segs, c
         first_time = cross_traj.get("first_appearance", "--")
         last_time = cross_traj.get("last_appearance", "--")
         num_cameras = cross_traj.get("total_cameras", 0)
-        total_duration = cross_traj.get("total_duration_seconds", 0)
+        # 后端可能如实返回 null，参与除法/比较前先兜底成 0
+        total_duration = safe_number(cross_traj.get("total_duration_seconds", 0))
         total_detections = cross_traj.get("total_detections", 0)
         vehicle_id = cross_traj.get("vehicle_id", "")
     else:
@@ -429,8 +431,10 @@ def _render_overview_card(target, overall_conf, obs_nodes, obs_segs, inf_segs, c
                 pass
 
     # 轨迹总距离（简单估算：推断段距离之和）
+    # estimated_travel_time 可能为 None（后端在无法估算时如实返回 null），
+    # 这里是要参与乘法的聚合量，用 safe_number 兜底成 0 秒。
     total_distance = sum(
-        seg.get("estimated_travel_time", 0) * 8  # 粗略估算：8m/s
+        safe_number(seg.get("estimated_travel_time")) * 8  # 粗略估算：8m/s
         for seg in inf_segs
     )
 
@@ -483,7 +487,7 @@ def _render_overview_card(target, overall_conf, obs_nodes, obs_segs, inf_segs, c
         with s2:
             st.markdown(f'<div class="traj-stat-box"><div class="traj-stat-value">{_html.escape(str(last_time))}</div><div class="traj-stat-label">最后出现</div></div>', unsafe_allow_html=True)
         with s3:
-            st.markdown(f'<div class="traj-stat-box"><div class="traj-stat-value">{num_cameras}</div><div class="traj-stat-label">经过摄像头数</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="traj-stat-box"><div class="traj-stat-value">{format_number(num_cameras, ".0f")}</div><div class="traj-stat-label">经过摄像头数</div></div>', unsafe_allow_html=True)
         with s4:
             st.markdown(f'<div class="traj-stat-box"><div class="traj-stat-value">{_html.escape(duration_str)}</div><div class="traj-stat-label">轨迹总时长</div></div>', unsafe_allow_html=True)
         with s5:
@@ -531,6 +535,7 @@ def _render_trajectory_details(obs_nodes, obs_segs, inf_segs, cross_traj=None):
                 direction = _html.escape(str(obs_segs[i].get("direction", "")))
                 enter_time = _html.escape(str(obs_segs[i].get("start_time", "")))
                 leave_time = _html.escape(str(obs_segs[i].get("end_time", "")))
+            # 置信度可能为 None：颜色走中性灰、数值显示 "--"，都不冒充 0
             conf = node.get("confidence", 0)
             conf_col = confidence_color(conf)
             rows.append(
@@ -540,7 +545,7 @@ def _render_trajectory_details(obs_nodes, obs_segs, inf_segs, cross_traj=None):
                 f"<td style='text-align:center;'>{enter_time or ts}</td>"
                 f"<td style='text-align:center;'>{leave_time or '--'}</td>"
                 f"<td style='text-align:center;'>{direction}</td>"
-                f"<td style='text-align:center;color:{conf_col};font-weight:600;'>{conf:.0%}</td>"
+                f"<td style='text-align:center;color:{conf_col};font-weight:600;'>{format_number(conf, '.0%')}</td>"
                 f"</tr>"
             )
 
@@ -583,12 +588,16 @@ def _render_trajectory_details(obs_nodes, obs_segs, inf_segs, cross_traj=None):
         for seg in inf_segs:
             src = _html.escape(str(CAMERA_NAME_MAP.get(seg.get("source_camera_id", ""), seg.get("source_camera_name", ""))))
             tgt = _html.escape(str(CAMERA_NAME_MAP.get(seg.get("target_camera_id", ""), seg.get("target_camera_name", ""))))
+            # confidence / estimated_travel_time 都可能为 None（后端如实返回 null）：
+            # 二者只用于展示，统一走 format_number 显示 "--"；
+            # 低置信度高亮只在确有数值且 < 0.5 时生效，未知值不高亮。
             conf = seg.get("confidence", 0)
             conf_tag = confidence_label(conf)
             est_t = seg.get("estimated_travel_time", 0)
-            low_class = ' style="color:#E53935;font-weight:600;"' if conf < 0.5 else ""
+            low_class = ' style="color:#E53935;font-weight:600;"' if (is_number(conf) and conf < 0.5) else ""
             infer_items.append(
-                f"<li{low_class}>{src} → {tgt}（置信度 {conf:.0%}，{conf_tag}，预估 {est_t:.0f}s）</li>"
+                f"<li{low_class}>{src} → {tgt}（置信度 {format_number(conf, '.0%')}，{conf_tag}，"
+                f"预估 {format_number(est_t, '.0f', 's')}）</li>"
             )
         st.markdown(f"""
         <div class="traj-infer-note">
@@ -629,10 +638,17 @@ def _render_analysis_summary(target, overall_conf, obs_nodes, inf_segs, cand_pat
     """渲染右侧研判摘要面板"""
     st.markdown('<div class="traj-analysis-title">研判摘要</div>', unsafe_allow_html=True)
 
+    # 综合可信度可能为 None（后端证据不足时如实返回 null）：
+    # 此时不做阈值比较、也不伪造成「低」，而是直接标为未知，避免误导研判。
+    conf_known = is_number(overall_conf)
+    _oc = safe_number(overall_conf)  # 仅用于阈值比较，展示仍走 format_number
+
     # 系统判断结论
-    if overall_conf >= 0.7:
+    if not conf_known:
+        conclusion = "综合可信度缺失（后端未给出可计算的依据），无法自动研判，建议人工复核。"
+    elif _oc >= 0.7:
         conclusion = "目标轨迹连续性良好，多卡口确认经过，系统判断为同一目标。"
-    elif overall_conf >= 0.4:
+    elif _oc >= 0.4:
         conclusion = "目标轨迹存在部分推断段，整体可信度中等，建议补充周边卡口证据。"
     else:
         conclusion = "目标轨迹断点较多，推断段置信度低，需人工复核确认。"
@@ -650,10 +666,13 @@ def _render_analysis_summary(target, overall_conf, obs_nodes, inf_segs, cand_pat
             )
 
     # 可信度评级
-    if overall_conf >= 0.7:
+    if not conf_known:
+        rating_label = "未知"
+        rating_class = "traj-rating-low"
+    elif _oc >= 0.7:
         rating_label = "高"
         rating_class = "traj-rating-high"
-    elif overall_conf >= 0.4:
+    elif _oc >= 0.4:
         rating_label = "中"
         rating_class = "traj-rating-mid"
     else:
@@ -673,7 +692,7 @@ def _render_analysis_summary(target, overall_conf, obs_nodes, inf_segs, cand_pat
         <div class="traj-analysis-row">
             <div class="traj-analysis-label">轨迹可信度评级</div>
             <div><span class="{rating_class}">{rating_label}</span>
-                 &nbsp;<span style="font-size:12px;color:#667085;">({overall_conf:.0%})</span></div>
+                 &nbsp;<span style="font-size:12px;color:#667085;">({format_number(overall_conf, '.0%')})</span></div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -805,7 +824,7 @@ def _generate_pdf_report(traj_data: dict) -> bytes:
     summary_text = (
         f"目标类型: {type_cn}  |  "
         f"车牌号码: {plate}  |  "
-        f"综合可信度: {overall_conf:.0%}<br/>"
+        f"综合可信度: {format_number(overall_conf, '.0%')}<br/>"
         f"确认经过卡口: {len(obs_nodes)} 个  |  "
         f"推断行驶段: {len(inf_segs)} 段  |  "
         f"可能路线: {len(cand_paths)} 条"
@@ -826,7 +845,8 @@ def _generate_pdf_report(traj_data: dict) -> bytes:
                 leave_t = obs_segs[i].get("end_time", "")
                 direction = obs_segs[i].get("direction", "")
             conf = node.get("confidence", 0)
-            table_data.append([str(i + 1), cam_name, enter_t or ts, leave_t or "--", direction, f"{conf:.0%}"])
+            table_data.append([str(i + 1), cam_name, enter_t or ts, leave_t or "--", direction,
+                               format_number(conf, ".0%")])
 
         t = Table(table_data, colWidths=[30, 140, 80, 80, 70, 50])
         t.setStyle(TableStyle([
@@ -851,12 +871,14 @@ def _generate_pdf_report(traj_data: dict) -> bytes:
         for seg in inf_segs:
             src = CAMERA_NAME_MAP.get(seg.get("source_camera_id", ""), seg.get("source_camera_name", ""))
             tgt = CAMERA_NAME_MAP.get(seg.get("target_camera_id", ""), seg.get("target_camera_name", ""))
+            # actual_travel_time 在后端无法确定时如实返回 None（例如两侧观测时间重叠），
+            # 这里显示 "--" 而不是编造 0 秒。
             conf = seg.get("confidence", 0)
             est_t = seg.get("estimated_travel_time", 0)
             act_t = seg.get("actual_travel_time", 0)
             inf_table.append([
-                f"{src} -> {tgt}", f"{conf:.0%}",
-                f"{est_t:.0f}秒", f"{act_t:.0f}秒",
+                f"{src} -> {tgt}", format_number(conf, ".0%"),
+                format_number(est_t, ".0f", "秒"), format_number(act_t, ".0f", "秒"),
             ])
         t2 = Table(inf_table, colWidths=[180, 60, 80, 80])
         t2.setStyle(TableStyle([
@@ -882,7 +904,8 @@ def _generate_pdf_report(traj_data: dict) -> bytes:
             conf = path.get("confidence", 0)
             desc = path.get("description", "")
             dist = path.get("distance_meters", 0)
-            path_table.append([f"路线{i + 1}", desc, f"{conf:.0%}", f"{dist:.0f}m"])
+            path_table.append([f"路线{i + 1}", desc,
+                               format_number(conf, ".0%"), format_number(dist, ".0f", "m")])
         t3 = Table(path_table, colWidths=[50, 200, 60, 60])
         t3.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), color_primary),
@@ -969,7 +992,7 @@ def _generate_excel_report(traj_data: dict) -> bytes:
     info_rows = [
         ("目标类型", type_label(target.get("target_type", ""))),
         ("车牌号码", target.get("plate_number", "--") or "--"),
-        ("综合可信度", f"{overall_conf:.0%}"),
+        ("综合可信度", format_number(overall_conf, ".0%")),
         ("确认卡口数", str(len(obs_nodes))),
         ("推断行驶段", str(len(inf_segs))),
         ("可能路线", str(len(cand_paths))),
@@ -1003,7 +1026,7 @@ def _generate_excel_report(traj_data: dict) -> bytes:
         ws1.cell(row=r, column=3, value=enter_t or ts)
         ws1.cell(row=r, column=4, value=leave_t or "--")
         ws1.cell(row=r, column=5, value=direction)
-        ws1.cell(row=r, column=6, value=f"{conf:.0%}")
+        ws1.cell(row=r, column=6, value=format_number(conf, ".0%"))
         _style_data_row(ws1, r, len(headers), is_alt=(i % 2 == 1))
 
     ws1.column_dimensions["A"].width = 8
@@ -1028,9 +1051,13 @@ def _generate_excel_report(traj_data: dict) -> bytes:
         r = 3 + i
         ws2.cell(row=r, column=1, value=CAMERA_NAME_MAP.get(seg.get("source_camera_id", ""), seg.get("source_camera_name", "")))
         ws2.cell(row=r, column=2, value=CAMERA_NAME_MAP.get(seg.get("target_camera_id", ""), seg.get("target_camera_name", "")))
-        ws2.cell(row=r, column=3, value=f"{seg.get('confidence', 0):.0%}")
-        ws2.cell(row=r, column=4, value=f"{seg.get('estimated_travel_time', 0):.0f}")
-        ws2.cell(row=r, column=5, value=f"{seg.get('actual_travel_time', 0):.0f}")
+        # 这三列原本写作 f"{seg.get('k', 0):.0%/.0f}"：dict.get 兜不住「键存在、值为 None」，
+        # actual_travel_time 为 None 时这里会抛
+        # TypeError: unsupported format string passed to NoneType.__format__。
+        # 修复后缺失值显示为 "--"，不编造 0。
+        ws2.cell(row=r, column=3, value=format_number(seg.get("confidence", 0), ".0%"))
+        ws2.cell(row=r, column=4, value=format_number(seg.get("estimated_travel_time", 0), ".0f"))
+        ws2.cell(row=r, column=5, value=format_number(seg.get("actual_travel_time", 0), ".0f"))
         _style_data_row(ws2, r, len(inf_headers), is_alt=(i % 2 == 1))
 
     path_start = 3 + len(inf_segs) + 2
@@ -1049,9 +1076,9 @@ def _generate_excel_report(traj_data: dict) -> bytes:
         r = path_start + 2 + i
         ws2.cell(row=r, column=1, value=f"路线{i + 1}")
         ws2.cell(row=r, column=2, value=path.get("description", ""))
-        ws2.cell(row=r, column=3, value=f"{path.get('confidence', 0):.0%}")
-        ws2.cell(row=r, column=4, value=f"{path.get('distance_meters', 0):.0f}")
-        ws2.cell(row=r, column=5, value=f"{path.get('estimated_time', 0):.0f}")
+        ws2.cell(row=r, column=3, value=format_number(path.get("confidence", 0), ".0%"))
+        ws2.cell(row=r, column=4, value=format_number(path.get("distance_meters", 0), ".0f"))
+        ws2.cell(row=r, column=5, value=format_number(path.get("estimated_time", 0), ".0f"))
         _style_data_row(ws2, r, len(path_headers), is_alt=(i % 2 == 1))
 
     ws2.column_dimensions["A"].width = 28

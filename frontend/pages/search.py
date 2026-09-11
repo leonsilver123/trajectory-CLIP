@@ -21,7 +21,7 @@ from frontend.utils import (
     _convert_trajectory_response,
     type_label, get_target_type_icon, format_attributes,
     resolve_image_path, get_no_image_placeholder, confidence_color,
-    CAMERA_NAME_MAP, API_BASE,
+    CAMERA_NAME_MAP, API_BASE, is_number, safe_number, format_number,
 )
 from src.common.ids import extract_vehicle_id
 
@@ -275,6 +275,9 @@ def _render_warning_block(message: str, icon: str = "⚠️", border_color: str 
 
 
 def _match_level(score: float) -> str:
+    """匹配度标签；score 可能为 None（后端未给出综合分），此时标为未知而非「低」"""
+    if not is_number(score):
+        return "未知"
     if score >= 0.7:
         return "高"
     elif score >= 0.4:
@@ -283,6 +286,9 @@ def _match_level(score: float) -> str:
 
 
 def _match_level_color(score: float) -> str:
+    """匹配度文字色；无有效分数时用中性灰"""
+    if not is_number(score):
+        return "#98A2B3"
     if score >= 0.7:
         return "#2E7D32"
     elif score >= 0.4:
@@ -291,6 +297,9 @@ def _match_level_color(score: float) -> str:
 
 
 def _match_level_bg(score: float) -> str:
+    """匹配度底色；无有效分数时用中性灰底"""
+    if not is_number(score):
+        return "#F2F4F7"
     if score >= 0.7:
         return "#E8F5E9"
     elif score >= 0.4:
@@ -541,9 +550,12 @@ def _apply_filters(results: dict, filters: dict | None) -> dict:
         filtered = [c for c in filtered if _mm(c)]
 
     # 置信度下限
+    # combined_score 可能为 None（后端未给出综合分）：这类候选无法判定是否达标，
+    # 直接参与 >= 比较会抛 TypeError，故用 safe_number 兜底（缺失按 0 处理，即不达标）。
     min_conf = filters.get("min_confidence", 0)
     if min_conf and min_conf > 0:
-        filtered = [c for c in filtered if c.get("combined_score", 0) >= min_conf]
+        filtered = [c for c in filtered
+                    if safe_number(c.get("combined_score", 0)) >= min_conf]
 
     # 仅已确认
     if filters.get("confirmed_only"):
@@ -881,7 +893,7 @@ def _render_results_table(results: dict):
         level_bg = _match_level_bg(score)
         match_html = (
             f'<span class="srch-match-tag" style="background:{level_bg};color:{level_color};">'
-            f'{level} {score:.0%}</span>'
+            f'{level} {format_number(score, ".0%")}</span>'
         )
         status_html = _confirm_status_tag(cand)
 
@@ -1026,7 +1038,7 @@ def _render_detail(cand: dict, query_id: str):
             f'<div class="search-detail-panel">'
             f'<div class="search-detail-title">'
             f'第 {rank_safe} 条详情 &nbsp; '
-            f'<span style="color:{level_color};font-size:12px;">匹配度: {level} ({score:.0%})</span>'
+            f'<span style="color:{level_color};font-size:12px;">匹配度: {level} ({format_number(score, ".0%")})</span>'
             f'</div></div>',
             unsafe_allow_html=True,
         )

@@ -70,6 +70,27 @@
 
 ---
 
+### 0.5 贯穿性问题：项目里存在**两套不兼容的 CLIP 特征空间**（新发现，未修）
+
+重构过程中发现一个比原计划描述的更严重的版本不一致，**实测取证如下**：
+
+| 来源 | 维度 | 模型 | 覆盖 | 谁在用 |
+|---|---|---|---|---|
+| `output/clip_vectors.faiss` | **512** | Chinese-CLIP **ViT-B-16** | 68349 / 68349（100%） | `api/routes/search.py`（活的检索路径） |
+| `detection.clip_image_vector`（内联） | **768** | Chinese-CLIP **ViT-L-14** | 949 / 68349（**1.39%**，全部 `source=="track3"`） | `src/trajectory/builder.py`（任务 6 新增，用于 `_score_appearance`） |
+| `configs/default.yaml:124-125` | 声明 **768** | 声明 **CN-CLIP-ViT-L-14** | — | 配置声明，与 `search.py` 实际不符 |
+
+**问题**：配置声明 L-14/768，而线上检索实际用 B-16/512 —— **两者不是同一个特征空间，向量不可混用**（维度都不同）。`CLAUDE.md` 已记载该脱节，但此前无人量化。
+
+**影响与处置**：
+- 新 builder 用的是**内联 768 维**（1.39% 覆盖），故 `_score_appearance` 仅对 1.39% 的检测是真实计算，其余约 98.6% 回退中性 0.5 —— 这直接削弱了弱身份路径的判别力（见任务 6 遗留 1）。
+- 检索路径用 512 维索引，**覆盖 100%**，是本项目 CLIP 能力的主载体。
+- **本次未统一**（属上游数据重建问题：需要重跑特征提取管线，成本高且不在 9 个任务范围内）。**列入交付报告头号遗留项**。
+
+> 附：主 agent 曾向子 agent 断言「JSON 里没有 clip_vector」——**该断言错误**，子 agent 实测反证并正确使用了内联向量。已更正。
+
+---
+
 ## 一、目标（一句话）
 
 把项目从「三套平行实现、只有 JSON 直读一条活」重构成**诚实、分层、有状态**的系统，围绕两个真价值：① 离散观测链的诚实表达；② recall→confirm→backtrack 的人机协同闭环。
@@ -270,7 +291,18 @@ idle ──search──► searched(query_id)
   2. 本数据集**每条 detection 都带真实 `vehicle_id`**，故 `auto` 模式恒走强身份；弱身份分支必须显式 `mode="stitch"` 才触发
   3. `src/stitching/scoring.py` 的 `_count_possible_paths` 是**无界 DFS**，实测单对摄像头耗 4–23 秒。子 agent 在 `builder.py` 里用**子类加上界绕过**，**未改上游** `src/stitching`（避免动公共模块）。上游隐患仍在
   4. `evidence.linkage_confidence` 当前为 `None`（未填充）
-  5. 上一轮遗留的前端格式化风险：本次 `candidate_paths` 仍为数值，未触发 `None` 崩溃；但 `inference_segments` 现已非空，前端 `frontend/pages/trajectory.py` / `timeline.py` 的格式化点**需实测确认**（已列入交付报告待验项）
+  5. 上一轮遗留的前端格式化风险：本次 `candidate_paths` 的 `confidence`/`estimated_time`/`distance_meters` 均为**真实数值**（`0.3411`/`15.3`/`213.0`），不会触发 `None` 崩溃，且已加回归测试 `test_candidate_path_numeric_fields` 守约。**但 `inference_segments[].actual_travel_time` 为 `None`**（本数据集 timestamp 是各摄像头视频内时间且跨镜重叠，「首现−末现」常为负，故诚实留空而非取绝对值凑数）→ **已实测确认会令 `frontend/pages/trajectory.py:1033` 抛 `TypeError`**，已派修（见任务 5 遗留追加项）
+  6. **评分维度大面积为空（子 agent 逐项披露，主 agent 已复核）**：
+     - `reid`：**全空**。`avg_reid_vector` 恒为 `None`，外观分完全由 CLIP 支撑。但 `stitching.weights.vehicle.reid = 0.15` 的权重**仍然生效**——即权重实际挂在 CLIP 分上，**这是真实的语义偏差**（配置项名与其实指不符）
+     - `plate`：**全空**。数据集无车牌字段，`_score_plate` 对双方均返回中性 0.5，导致 `is_valid = score > 0 and plate_score > 0` 这道校验形同虚设
+     - `appearance`：**仅 1.39% 为真实计算**（见 §0.5），其余回退中性 0.5
+     - `temporal` / `spatial`：强身份路径上基本为退化值（跨镜时间窗重叠）
+     - `entry_description` / `exit_description`：仍为空串（无真实标注）
+  7. **上游性能隐患未修**：`src/stitching/scoring.py` 的 `_count_possible_paths` 是**无界 DFS**，实测单对摄像头 **4–23 秒**（c001→c002 23.16s、c003→c004 12.08s）。子 agent 在 `builder.py` 内**用子类加上界覆盖**（`BoundedCrossCameraScorer`，返回值与上游一致），线上实测降至 0.8s。**上游文件未改**（避免动公共模块）→ **隐患仍在，任何其他调用方都会踩**
+  8. **弱身份路径匹配错误（子 agent 主动如实标注为"通路已连通、准确率差"，非成功）**：V0034 的链跑出 `c004→CF3_TRACK_c004_V0001`、`c002→CF3_TRACK_c002_V0008`，**两段都不是 V0034 自己的轨迹**。根因两条且均有实测支撑：① 内联 CLIP 区分度弱（不同车 cos 0.88–0.90，本车 0.942）；② 同一辆车 `vehicle_type` **跨镜标注不一致**（V0034 在 c001 标 SUV、c002/c005 标轿车、c003/c004 标面包车），导致 `CandidateEdgeGenerator` 的硬属性否决**惩罚正确轨迹（attr=0.5）而奖励错误车辆（attr=1.0）**。属数据/上游算法问题，**未修**。
+     > **主 agent 已独立复核该根因②**（脚本按 `vehicle_id × camera` 交叉统计，实测 `V0034`）：
+     > `c001` 混杂 SUV/轿车 且两种颜色；`c002` 混杂 轿车/SUV/面包车 且三种颜色；`c003` 混杂 面包车/轿车 且三种颜色；`c004` 基本全为面包车；`c005` 混杂 轿车/SUV 且两种颜色。
+     > **同一辆车不仅跨摄像头标注不一致，单个摄像头内部的检测标注也自相矛盾** → 说明属性标注本身噪声极大。这**同时损害了检索的 `_attribute_filter` 与拼接的 `_score_attribute`**，属**数据质量问题**，非代码可修
 
 ---
 
@@ -362,6 +394,8 @@ idle ──search──► searched(query_id)
 
 > 每次修改在此追加一条，格式：`日期 — 任务# — 一句话说明改了什么/没改什么`。
 
+- 2026-09-11 — 波次2 — 任务 5 完成（`frontend/utils.py` 1374→703 行，删净本地 CLIP/BLIP 管线，检索收敛为后端一处）；任务 6 完成（新增 `src/trajectory/builder.py`，`src/stitching` **首次线上生效**；`/trace` 由单摄像头退化为**跨摄像头**：`['c040']` → `['c004','c005','c003','c002','c001']`，`inference_segments` 由恒空变为有内容，`overall_confidence` 由硬编码 0.0 变为真实 0.3411，每段新增 `basis` 标注）。pytest `13 failed, 335 passed`，失败集合与基线逐条一致；**冒烟 15/15**（含真实拉起 Streamlit 并探活 `/_stcore/health`）。
+- 2026-09-11 — 波次2 新发现 — ① **项目存在两套不兼容的 CLIP 特征空间**（512/ViT-B-16 覆盖 100% vs 768/ViT-L-14 覆盖 1.39%），配置声明与实际不符，见 §0.5；② **属性标注噪声极大**：同一车辆 `vehicle_type`/`color` 跨摄像头乃至单摄像头内部自相矛盾（已实测 `V0034`），同时损害检索过滤与拼接评分；③ 实测确认 `actual_travel_time=None` 会令前端 Excel 导出抛 `TypeError`，已派修。
 - 2026-09-11 — 任务#9 — `git init` + 首提交 `a155f0a`（180 文件，最大 92KB），建立版本保护；`.gitignore` 排除 output/models/cityflow/qdrant_storage 等大目录。**未改任何源码**。
 - 2026-09-11 — 波次1验收 — 任务 1/2/3/7 完成并经**独立复核**（不采信子 agent 自述）：pytest `13 failed, 306 passed`，失败集合与基线用 `comm` 逐个比对**完全一致**（零回归）；真实 HTTP 冒烟 `14/14 通过`，其中 confirm 非法 query_id 返回 404、`/trace` 两次调用结果完全一致（无随机性）、`/trajectory` 真实聚合出 `vehicle_id=V0322 摄像头3 检测125`。任务 8 的 `docker compose config` rc=0 验证挂载路径解析正确。
 - 2026-09-11 — 任务#0（环境）— 建 venv 依赖（fastapi/uvicorn/streamlit 因被 C 盘用户级 site-packages 遮蔽，必须 `--ignore-installed` 才会真正装进 .venv）；新增 `pytest.ini`（`testpaths=tests`，把收集耗时从 438s 降到 <1s）；定位两个 sys.path 遮蔽坑并给出规避环境变量；建立基线 13 failed / 251 passed / 6 xpassed。**未改任何源码**。
