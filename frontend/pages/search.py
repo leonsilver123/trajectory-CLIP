@@ -21,8 +21,7 @@ from frontend.utils import (
     _convert_trajectory_response,
     type_label, get_target_type_icon, format_attributes,
     resolve_image_path, get_no_image_placeholder, confidence_color,
-    has_cityflow_results, build_search_results_from_cityflow,
-    CAMERA_NAME_MAP,
+    CAMERA_NAME_MAP, API_BASE,
 )
 from src.common.ids import extract_vehicle_id
 
@@ -440,52 +439,37 @@ def _render_active_filters(filters: dict):
 
 
 def _do_search(query: str, top_k: int, filters: dict | None = None) -> dict | None:
-    """执行分步检索：API → CityFlow（唯一本地数据源）。"""
+    """执行检索 —— 唯一真源是后端检索接口（POST /api/v1/search/query）。
+
+    前端不再本地加载 CLIP/BLIP 打分：后端在 CLIP 不可用时已会自行退化为属性分数
+    排序（「少一步」），因此这里不做任何本地替身实现。
+    后端不可用时**如实提示用户并返回 None**，不静默切换成另一套算法。
+
+    返回：与后端 SearchResponse 兼容的 dict；后端不可用时为 None。
+    """
     progress_placeholder = st.empty()
 
     with progress_placeholder.container():
-        render_progress_bar(progress=0.2, label="正在连接数据源...", show_pct=False)
-        render_loading_spinner("正在连接数据源...")
+        render_progress_bar(progress=0.2, label="正在连接检索服务...", show_pct=False)
+        render_loading_spinner("正在连接检索服务...")
+
     results = api_search(query, top_k=top_k)
     if results is not None:
-        logger.info("⚠️ 使用后端 API 返回结果（非 CityFlow）")
+        st.session_state.pop("_search_backend_down", None)
         with progress_placeholder.container():
             render_progress_bar(progress=1.0, label="检索完成", show_pct=True)
         return _apply_filters(results, filters) if filters else results
 
-    logger.info("❌ API 不可用，切换到 CityFlow 本地数据")
-
-    # CityFlow 数据源（唯一本地数据源）
-    if has_cityflow_results():
-        logger.info("✅ 使用 CityFlow 本地数据进行检索")
-        with progress_placeholder.container():
-            render_progress_bar(progress=0.4, label="正在检索数据...", show_pct=False)
-            render_loading_spinner("正在检索数据...")
-        cf_scene = (filters or {}).get("cf_scene", "")
-        cf_camera = (filters or {}).get("cf_camera", "")
-        cf_colors = (filters or {}).get("cf_colors", [])
-        cf_types = (filters or {}).get("cf_types", [])
-        scene_val = SCENE_OPTIONS.get(cf_scene, "") if cf_scene else ""
-        camera_val = CAMERA_OPTIONS.get(cf_camera, "") if cf_camera else ""
-        logger.info(f"检索参数: query={query}, scene={scene_val}, camera={camera_val}")
-        results = build_search_results_from_cityflow(
-            query=query, top_k=top_k,
-            scene_filter=scene_val,
-            camera_filter=camera_val,
-            color_filter=cf_colors if cf_colors else None,
-            type_filter=cf_types if cf_types else None,
-        )
-        if results is not None:
-            logger.info(f"返回 {len(results.get('candidates', []))} 条结果")
-            with progress_placeholder.container():
-                render_progress_bar(progress=1.0, label="检索完成", show_pct=True)
-            return _apply_filters(results, filters) if filters else results
-
-    # 无可用数据源
+    # 后端不可用 / 返回非 200：如实告知，不用本地算法兜底
+    logger.warning(f"检索服务不可用（{API_BASE}/api/v1/search/query），本次检索未产生结果")
+    st.session_state["_search_backend_down"] = True
     with progress_placeholder.container():
-        render_progress_bar(progress=1.0, label="检索完成", show_pct=True)
-    if not has_cityflow_results():
-        st.warning("数据尚未就绪，请先运行预处理脚本")
+        render_progress_bar(progress=1.0, label="检索失败", show_pct=True)
+    _render_warning_block(
+        f"检索服务不可用，本次未返回任何结果。请确认后端服务已启动（{API_BASE}）；"
+        "本页面不再提供本地替代检索。",
+        "⚠️", "#E53935",
+    )
     return None
 
 
@@ -799,13 +783,15 @@ def render():
             st.session_state["search_results"] = results
             st.session_state["search_query"] = query_text or "全库检索"
         else:
-            # 搜索无结果时，检测是否需要显示特殊提示并持久化
-            _q = query_text or ""
-            _hint = _detect_query_hint(_q)
-            if _hint:
-                st.session_state["_search_hint"] = {
-                    "message": _hint[0], "icon": _hint[1], "border_color": _hint[2],
-                }
+            # 搜索无结果时，检测是否需要显示特殊提示并持久化。
+            # 后端不可用时不再叠加该提示：那只是服务没起来，推断「数据集不含该目标」会误导用户。
+            if not st.session_state.get("_search_backend_down"):
+                _q = query_text or ""
+                _hint = _detect_query_hint(_q)
+                if _hint:
+                    st.session_state["_search_hint"] = {
+                        "message": _hint[0], "icon": _hint[1], "border_color": _hint[2],
+                    }
             st.session_state.pop("search_results", None)
 
     # ── 展示结果 ──

@@ -36,17 +36,37 @@
 | 5 | `tests/test_camera_manager.py` | 真实数据不匹配：测试期望纬度 42.526，YAML 实际 31.326；`get_nearby_cameras` 返回空 |
 | 2 | `tests/test_retrieval_accuracy.py` | 阈值边界：车型召回 0.8000 要求 `> 0.8`；查询数 4 < 5 |
 
+> **关于"基线数字对不上"的说明**：并行子 agent 曾各自报出 `19 failed / 245 passed`，与我给的 `13 failed / 251 passed` 不一致。
+> 两者都是**真值，只是测量时刻不同**：`13/251` 是**任何 agent 动手之前**测得；`19/245` 是子 agent 在**任务 1/2 已改完 `backtrack.py`/`confirm.py` 之后**才跑的，此时 `tests/test_api.py` 里 6 条断言旧行为的用例已从「通过」变为「失败」。
+> 校验：`13 + 6 = 19`，`251 - 6 = 245` —— 正好吻合。所以**不存在矛盾，也不是谁测错了**。
+> 后续所有验收统一以「失败集合与基线逐个一致」为准（用 `comm` 比对），而不是比单个数字。
+
 ### 0.3 计划前提的更正（**计划原文有错，以本表为准**）
 
 | 计划原文的说法 | 核实结果 | 处置 |
 |---|---|---|
 | 任务 5："`clip_vectors.faiss` 找不到 faiss，是死代码" | **错**。`faiss` 1.14.3 与 `cn_clip` 均可导入；`output/clip_vectors.faiss` 存在（68349 向量 × 512 维）；`models/clip_cn_vit-b-16.pt` 存在（753MB）。该分支**不是死代码** | 任务 5 重新定义为"前端/后端重复实现收敛"，**不删 CLIP 能力** |
-| 任务 7："被替代的旧 `configs/camera_metadata.yaml`" | **错**。`api/routes/dashboard.py:31` 正在读它（`_CAMERA_CONFIG`），删了 `/dashboard` 就废 | **保留该文件**，任务 7 不再包含它 |
+| 任务 7："被替代的旧 `configs/camera_metadata.yaml`" | **错**（但我的更正第一版也过头了，见下）。`api/routes/dashboard.py:31` 确实在读它（`_CAMERA_CONFIG`） | **保留该文件**，任务 7 不再包含它 |
 | 任务 7：`api/routes/search_backup.py` 可删 | **对**。全仓仅在 `.md` 中被提及，无 `.py` 引用，`api/main.py` 只注册 4 个 router | 删 |
 | 任务 7：`requirements.txt` 的 `flask` 未用 | **对**。全仓 `.py` 中 `\bflask\b` 零命中 | 删该行 |
 | 任务 7：`frontend/mock_data.py` | 仅自身 docstring 提及，无任何 import | 删 |
 
 > 教训：`HANDOFF.md`/`PLAN.md` 的部分前提基于未验证的观察。**动任何"死代码"前必须先 grep 取证**。
+
+### 0.4 主 agent 自身判断的两处更正（子 agent 提出，我已复核）
+
+**更正 A：`configs/camera_metadata.yaml` 是「被引用但非 load-bearing」，不是我说的「删了就废」**
+- 我最初写「删了 `/dashboard` 就废」——**说过头了**。
+- 实测（`yaml.safe_load` 复核）：该文件**只有 `scenes:` 一个顶层键，没有 `cameras:` / `camera_list:`**。因此 `api/routes/dashboard.py` 的 `_load_camera_metadata()` 里 `data.get("cameras", data.get("camera_list", []))` 拿到 `[]`，直接落进第 99-121 行「从 results.json 推断」的兜底分支。
+- 子 agent 做了非破坏性 A/B（只在内存改路径、未动磁盘）：带文件与不带文件均返回 **2384 条、首条 `000001`、`identical: True`**。
+- **准确结论**：它仍被活代码路径引用（`dashboard.py:31`；另在 `camera_manager.py:38`、`road_topology.py:37` 的用法示例里出现），但**不是 load-bearing**——删掉不会让接口失效，只会静默切到兜底分支。**保留依然正确**（仍被引用 + 原计划理由不成立），但保留理由要写成这个准确的版本。
+- 处置不变：**文件未删**。
+
+**更正 B：`.dockerignore` 并未被覆盖，是我看错了**
+- 我先前称「该文件在派活前已存在，被 Agent B 覆盖、原内容可能丢失」——**这是错的**。
+- Agent B 的证据链：其 `Write` 返回的是 `File created successfully`；而本 harness 对「未先 Read 就覆盖已存在文件」是**直接拒绝**的——能写入即证明当时文件不存在。
+- 复核时间线：`.dockerignore` mtime `22:52`（B 写入）、我新建的 `.gitignore` mtime `22:55`。而我那次 `ls -a .gitignore .dockerignore` 的观测结果是「`.gitignore` 不存在、`.dockerignore` 存在」，这只可能发生在 **22:52–22:55 之间**，即 **B 写入之后**。也就是说我看到的是 B 已创建的文件，而非它的前身。
+- **结论：无内容丢失，无需追查。** 我先前的判断把观测时刻搞错了。
 
 ---
 
@@ -83,13 +103,13 @@ idle ──search──► searched(query_id)
 |---|------|------|------|
 | 1 | 后端会话状态机 | P0 | [x] |
 | 2 | 删除伪回溯，只留真实聚合 | P0 | [x] |
-| 3 | ID 解析收敛成唯一函数 | P0 | [~] 仅剩 `frontend/pages/search.py:625` 一处 |
+| 3 | ID 解析收敛成唯一函数 | P0 | [x] 全仓 4 处已收敛，`startswith("V")` 零命中 |
 | 4 | 数据契约落盘，在线不读大 JSON | P1 | [ ] |
-| 5 | 检索管线收敛成一条 | P1 | [ ] |
-| 6 | 跨镜拼接统一到 TrajectoryBuilder | P1 | [ ] |
+| 5 | 检索管线收敛成一条 | P1 | [x] 前端本地 CLIP/BLIP 管线已删（-592 行），检索只剩后端一处 |
+| 6 | 跨镜拼接统一到 TrajectoryBuilder | P1 | [x] `/trace` 已由单摄像头变为跨摄像头；`src/stitching` 首次线上生效 |
 | 7 | 删死代码 | P2 | [x] |
-| 8 | 修部署（Docker 路径等） | P2 | [~] compose/Dockerfile 已修并复核；`.bat` 补修中 |
-| 9 | git 保护（初始化 + 首次提交） | P2 | [ ] |
+| 8 | 修部署（Docker 路径等） | P2 | [x] compose/Dockerfile/.bat 已修并复核；`docker/.env` 因权限未改 |
+| 9 | git 保护（初始化 + 首次提交） | P2 | [x] 首提交 `a155f0a`（180 文件）；波次 2 后需再提交一次 |
 
 ---
 
@@ -146,7 +166,13 @@ idle ──search──► searched(query_id)
   - `_generate_fallback_mock()`：保留但 docstring 明确标注为「仅数据文件缺失时的演示数据，非真实回溯」
   - 新增 `_path_distance_meters()`：用 `src.common.utils.haversine_distance` 按摄像头真实球面距离累加，取代原先「每段 250 米」的估算
 - 未修改：`/trajectory` 接口（本来就是真实聚合，未动）
-- **遗留**：`overall_confidence` 目前恒为 `0.0`、inference 段的时间/置信度为 `None` —— 这是**有意为之的诚实留空**（不再造数），待任务 6 接入 `src/stitching` 评分后填充
+- **遗留（重要，已转交任务 6）**：
+  1. `overall_confidence` 目前恒为 `0.0`、inference 段的时间/置信度为 `None` —— 这是**有意为之的诚实留空**（不再造数），待任务 6 接入 `src/stitching` 评分后填充
+  2. ⚠️ **`/trace` 目前必然返回「退化的单摄像头结果」**。子 agent 实测：`cityflow_results.json` 有 **68349 条 detection、68349 个互不相同的 `target_id`**，**每个 `target_id` 只出现在 1 个摄像头里**；跨镜身份**只存在于 `vehicle_id` 上**（如 `V0034` 覆盖 c001–c005 共 206 条）。而 `/trace` 是按 `target_id` 聚合的 → 恒为 1 摄像头、1 观测节点、`inference_segments` 恒空。
+     而**前端主流程走的正是 `/trace`** —— 也就是说「跨镜回溯」这条主线此前实际是空的。
+     本任务要求的「`/trace` 改为：从 session 拿 instance_id → 定位 vehicle_id → **复用 `/trajectory` 的真实聚合**」**未做**（当时指令只列了删 `random`）。**已转交任务 6**（强身份走 vehicle 级聚合、弱身份走 stitching）
+  3. `_load_camera_metadata_from_yaml()` 在 camera 已存在时**只 merge `name`，不 merge `latitude`/`longitude`** → `/trace` 的 lat/lon 恒为 `None` → 本任务新加的 `_path_distance_meters()`（haversine）恒返回 `0.0`。**已转交任务 6** 一并修（`src/stitching` 的 `_score_spatial` 也依赖真实坐标）
+  4. 前端格式化风险：`frontend/pages/trajectory.py:882-884`（PDF）、`:1053-1055`（Excel）对 `candidate_paths` 的 `confidence`/`estimated_time` 直接 `f"{x:.0%}"`，遇 `None` 会 TypeError。故这两项置 `0.0` 而非 `None`。**若任务 6 把它们改成 `None`，前端需加 `or 0` 兜底**（`inference_segments` 转非空后 `trajectory.py:433/588/855-856/1032-1033`、`timeline.py:604/611-612` 同理）
 - **验收证据（真实 HTTP）**：
   - `/trace` 同一 instance_id 连打两次，响应体**完全相等**（`[PASS] 两次结果一致`）
   - `grep random api/routes/backtrack.py` 仅剩 `_generate_fallback_mock` 内 5 处（演示数据），主路径为 0
@@ -165,13 +191,18 @@ idle ──search──► searched(query_id)
 - 改 `frontend/utils.py`（`_cityflow_det_to_candidate` 中反解 vehicle_id 部分）
 
 **验收标准**：
-- [ ] 三处统一调用 `parse_target_id`，无重复 `startswith("V")` 逻辑
-- [ ] 新增 `tests/test_ids.py` 覆盖 `CF3_c001_V0034_000001` 等格式
+- [x] 全部反解点统一调用 `src.common.ids`，无重复 `startswith("V")` 逻辑
+- [x] 新增 `tests/test_ids.py` 覆盖 `CF3_c001_V0034_000001` 等格式
 
 **变更记录**：
-- 尚无（未开始）。
-  - 已修改：无
-  - 未修改：全部
+- 已修改：
+  - 新建 `src/common/ids.py`：`parse_target_id` / `parse_track_id` / `extract_vehicle_id`。实现用正则（`_VEHICLE_RE = ^V\d+$`）而非 `startswith`，语义等价且更严；畸形输入返回空值不抛异常（保持原容错语义）
+  - `api/routes/backtrack.py`：删 `_extract_vehicle_id`，`/trajectory` 里的 `track_id.split("_")` 段一并改调 ids
+  - `frontend/utils.py`：`_cityflow_det_to_candidate` 里 6 行反解循环 → 1 行
+  - `frontend/pages/search.py`（**计划清单漏掉的第 4 处**）：`_build_traj_from_local` 里 6 行循环 → `extract_vehicle_id()`
+  - 新建 `tests/test_ids.py`（29 例）
+- **验收证据**：`grep -rn 'startswith("V")' --include=*.py api/ frontend/ src/ scripts/ tests/` → **零命中**（ids.py 用的是正则，本就不含该字面量）；29 例新测试全过
+- **已知行为差异（1 例，已如实记录）**：畸形输入 `V0034_c001_V0035_000001`（第 1 段是车辆号，违反 ID 契约）旧代码取 `V0034`、新代码按契约取第 3 段 `V0035`。17 组对照中其余 16 组完全一致。该形态在真实数据中不存在（source 段恒为 `CF3` 等），双方都是"垃圾进垃圾出"，未强行对齐
 
 ---
 
@@ -188,7 +219,7 @@ idle ──search──► searched(query_id)
 
 ---
 
-### 任务 5：检索管线收敛成一条　— 状态：`[ ]`
+### 任务 5：检索管线收敛成一条　— 状态：`[x]`
 
 > **前提已更正**（见 §0.3）：原计划"删 ViT-B-16 分支，因为它是死代码"是**错的**——
 > `faiss`/`cn_clip` 可用、索引与权重都在，该分支是**活的**。因此本任务改为
@@ -198,19 +229,48 @@ idle ──search──► searched(query_id)
 - 真正的问题：`frontend/utils.py` 有一套**独立的**「属性硬过滤 → OpenCLIP(ViT-L-14) → BLIP → 属性重排」管线，与后端 `search.py` 的「属性粗筛 → Chinese-CLIP(ViT-B-16) → 融合排序」**不一致**，且模型版本不同（L-14 vs B-16）。
 - 目标：**后端为唯一检索真源**，前端改为纯调用后端接口，不再本地跑 CLIP/BLIP。
 - Fallback =「少一步」（无 CLIP 时退化为属性分数，`search.py` 已有此逻辑）而非「换一套代码」。
-- 验收：[ ] 前端不再自行加载 CLIP/BLIP 模型；[ ] CLIP 不可用时接口仍返回属性排序结果；[ ] 前后端不再各有一套排序逻辑
+- 验收：[x] 前端不再自行加载 CLIP/BLIP 模型；[x] CLIP 不可用时接口仍返回属性排序结果；[x] 前后端不再各有一套排序逻辑
 
-**变更记录**：尚无（未开始）。
+**变更记录**：
+- 已修改：
+  - `frontend/utils.py`（**1374 → 703 行，删 592 行**）：删掉整套本地检索引擎 —— `build_search_results_from_cityflow()`、`_get_clip_extractor()`（CN-CLIP-ViT-L-14）、`_get_blip_extractor()` / `_blip_score_image_text()`（Salesforce/blip-itm-base-coco）、`_compute_attr_consistency()`、`_batch_cosine_similarity()`、`_cosine_similarity()`、`_cityflow_det_to_candidate()`、`_parse_cityflow_query()` 及其专用同义词表；连带清理失效的 `import numpy as np`
+  - `frontend/pages/search.py`：`_do_search()` 改为**唯一真源 = 后端 `POST /api/v1/search/query`**；删除 `if has_cityflow_results(): build_search_results_from_cityflow(...)` 本地兜底分支。后端不可用时**如实渲染警告块并返回 None**，不再静默换一套算法；同时抑制「数据集不含该目标」的二次误导提示
+  - 新建 `tests/test_frontend_retrieval.py`（6 例）：源码级断言 `frontend/` 无 CLIP/BLIP 加载标识、已删函数确不存在、轨迹展示函数仍在、`_do_search` 的 AST 只调用 `api_search` 且失败分支走警告
+- **保留**：`import torch` / `import yaml`（按 Docker 部署约定保留，注释说明 torch 已无使用点）；`load_cityflow_results()` / `has_cityflow_results()` / `resolve_image_path()` 及轨迹展示逻辑（属任务 4 范围）
+- **验收证据**：`grep` 已删函数在 `api/`/`src/`/`tests/` 下**无实际调用点**（仅剩 `utils.py` 的说明性注释与 `test_frontend_retrieval.py` 的断言）；`import frontend.utils, frontend.pages.search` OK；全量 pytest `13 failed, 334 passed`，失败集合与基线逐个一致
+- **遗留（子 agent 上报，未修，不擅自扩范围）**：
+  1. ⚠️ **筛选面板的「场景 / 摄像头」下拉框实际不生效**。已复核：`cf_scene`/`cf_camera` 只在 `search.py:376,381` 被收集、`317-320` 当标签显示、`563,565` 判空，**从未进入 `_apply_filters()`**；后端 `/search/query` 也不接受这两个参数。属**既有缺陷**（后端在线时改造前后一样无效，以前只有本地兜底分支会用到它们），现因本地分支删除而更明显。未修原因：补客户端后置过滤会削减 `top_k` 甚至返回 0 条，属**引入新行为**，超出本任务范围
+  2. 前端仍有 4 处直读 107MB `output/cityflow_results.json`（均**非检索**）：`frontend/utils.py:656`、`frontend/pages/search.py:625/697`、`frontend/pages/dashboard.py:26`、**`frontend/home.py:25,59`**（首页统计）→ 交任务 4
+  3. `_CITYFLOW_CROPS_DIR`（`utils.py:647`）改动前即无引用，属既有死代码，未动
+  4. `search.py:970` 的 `cand.get("data_source") == "cityflow"` 分支现已不可能命中（后端候选不带该字段），无害死分支，未动
 
 ---
 
-### 任务 6：跨镜拼接统一到 TrajectoryBuilder　— 状态：`[ ]`
+### 任务 6：跨镜拼接统一到 TrajectoryBuilder　— 状态：`[x]`
 
 - 新建 `src/trajectory/builder.py`（`TrajectoryBuilder.build(anchor_instance)`：强身份直接匹配 / 弱身份走 stitching）
 - 改 `api/routes/backtrack.py`（改调 TrajectoryBuilder，不再自写聚合）
-- 验收：[ ] `src/stitching` 首次被线上引用；[ ] 输出每段标注依据（强身份 vs 概率推断）
+- 验收：[x] `src/stitching` 首次被线上引用；[x] 输出每段标注依据（强身份 vs 概率推断）
 
-**变更记录**：尚无（未开始）。
+**变更记录**：
+- 已修改：
+  - 新建 `src/trajectory/__init__.py`、`src/trajectory/builder.py`（1343 行）。**强身份**（有真实 `vehicle_id`）→ 提为公共实现，按 vehicle 聚合跨摄像头序列；**弱身份**（无车牌/无真值，需显式 `mode="stitch"`）→ 调用 `src/stitching`（`CandidateEdgeGenerator` + `CrossCameraScorer` + `ObservationChainBuilder`），并写了 JSON detection → `src/common/data_models` dataclass 的适配层
+  - `api/routes/backtrack.py`：`/trace`、`/trajectory` 全部委托 `TrajectoryBuilder`，不再自写聚合；`_generate_fallback_mock()` 原样保留
+  - 新建 `tests/test_trajectory_builder.py`（23 例）
+- **主 agent 独立复核（真实 HTTP，非采信自述）**：
+  - `/trace` 由**单摄像头**变为**跨摄像头**：`camera_sequence=['c004','c005','c003','c002','c001']`（改前恒为 1 个摄像头），`inference_segments` 由**恒空**变为有内容
+  - 每段带 `basis` / `basis_text`：强身份路径 `basis="strong_identity"`、`confidence=1.0`；弱身份路径 `basis="probabilistic_inference"`
+  - `overall_confidence` 由硬编码 `0.0` 变为真实值（强身份 `0.3411`）
+  - `evidence` 新增 `identity_basis` / `identity_certainty` / `linkage_confidence` / `link_count` / `direction_consistency` / `vehicle_id`
+  - **`src/stitching` 确已被线上引用**：`src/trajectory/builder.py:55-57` 三条 import；`mode="stitch"` 实测 200（0.8s）、`evidence.source="src.stitching"`、`identity_basis="probabilistic_inference"`、段置信度 `0.7822/0.7779`、`overall_confidence=0.7801`
+  - 两次 `/trace` sha256 完全一致（无随机性回归）；`random` 仅存于 `_generate_fallback_mock`
+  - 全量 pytest `13 failed, 335 passed`，失败集合与基线逐个一致
+- **遗留（子 agent 如实上报，主 agent 已复核）**：
+  1. ⚠️ **弱身份路径「通路已连通、准确率差」**：实测 `mode="stitch"` 得到 `c004→c001→c002`，而强身份真值是 `c004→c005→c003→c002→c001` —— **两者不一致**，弱路径未还原真实链。子 agent 归因为「CLIP 区分度弱 + 同一车辆 `vehicle_type` 跨镜标注不一致」。**故弱身份结果不可信，仅证明通路打通**；生产使用应依赖强身份（或车牌）
+  2. 本数据集**每条 detection 都带真实 `vehicle_id`**，故 `auto` 模式恒走强身份；弱身份分支必须显式 `mode="stitch"` 才触发
+  3. `src/stitching/scoring.py` 的 `_count_possible_paths` 是**无界 DFS**，实测单对摄像头耗 4–23 秒。子 agent 在 `builder.py` 里用**子类加上界绕过**，**未改上游** `src/stitching`（避免动公共模块）。上游隐患仍在
+  4. `evidence.linkage_confidence` 当前为 `None`（未填充）
+  5. 上一轮遗留的前端格式化风险：本次 `candidate_paths` 仍为数值，未触发 `None` 崩溃；但 `inference_segments` 现已非空，前端 `frontend/pages/trajectory.py` / `timeline.py` 的格式化点**需实测确认**（已列入交付报告待验项）
 
 ---
 
@@ -284,11 +344,17 @@ idle ──search──► searched(query_id)
 
 ---
 
-### 任务 9：git 保护　— 状态：`[ ]`
+### 任务 9：git 保护　— 状态：`[x]`
 
 - 初始化空 `.git`（当前无 HEAD/commit），首次提交 + `.gitignore`（排除 `output/`、`models/`、`yolov8x.pt` 等大文件）
 
-**变更记录**：尚无（未开始）。
+**变更记录**：
+- 已修改：
+  - `git init`，设置仓库级 `user.name` / `user.email`（仅本仓库，不动全局配置）
+  - 新建 `.gitignore`：排除 `output/`、`models/`、`cityflow/`（含 AICity/VisDrone 数据集 zip）、`data/`、`docker_data/`、**`docker/qdrant_storage/`（461MB）**、`.venv/`、`*.pt`、`*.faiss`、`*.parquet`、`*.sqlite` 等；`docker/` 只排除 `qdrant_storage/` 子目录，保留其中的 `init_qdrant.py`、`nginx.conf` 源码
+  - 首次提交 `a155f0a`（**180 个文件，最大文件仅 92KB** —— 已逐项核对，大文件均被正确挡住）
+- **为什么先做**：HANDOFF §8 指出此前无 HEAD/commit，任何改动**无版本保护**；波次 2 还要大改 `api/routes/backtrack.py` 与 `frontend/`，先建快照才能出问题时回滚
+- **遗留**：本提交是在波次 2 进行中打的检查点，包含部分波次 2 的中间状态；**需在波次 2 验收后追加一次提交**，才是干净终态
 
 ---
 
@@ -296,6 +362,8 @@ idle ──search──► searched(query_id)
 
 > 每次修改在此追加一条，格式：`日期 — 任务# — 一句话说明改了什么/没改什么`。
 
+- 2026-09-11 — 任务#9 — `git init` + 首提交 `a155f0a`（180 文件，最大 92KB），建立版本保护；`.gitignore` 排除 output/models/cityflow/qdrant_storage 等大目录。**未改任何源码**。
+- 2026-09-11 — 波次1验收 — 任务 1/2/3/7 完成并经**独立复核**（不采信子 agent 自述）：pytest `13 failed, 306 passed`，失败集合与基线用 `comm` 逐个比对**完全一致**（零回归）；真实 HTTP 冒烟 `14/14 通过`，其中 confirm 非法 query_id 返回 404、`/trace` 两次调用结果完全一致（无随机性）、`/trajectory` 真实聚合出 `vehicle_id=V0322 摄像头3 检测125`。任务 8 的 `docker compose config` rc=0 验证挂载路径解析正确。
 - 2026-09-11 — 任务#0（环境）— 建 venv 依赖（fastapi/uvicorn/streamlit 因被 C 盘用户级 site-packages 遮蔽，必须 `--ignore-installed` 才会真正装进 .venv）；新增 `pytest.ini`（`testpaths=tests`，把收集耗时从 438s 降到 <1s）；定位两个 sys.path 遮蔽坑并给出规避环境变量；建立基线 13 failed / 251 passed / 6 xpassed。**未改任何源码**。
 - 2026-09-11 — 计划勘误 — 核实并更正了任务 5（CLIP 分支是活的，非死代码）与任务 7（`configs/camera_metadata.yaml` 是活的，不可删）两处前提错误，详见 §0.3。
 - 2026-09-11：创建本计划文件，尚未开始任何代码修改。
