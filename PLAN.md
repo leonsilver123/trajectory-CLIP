@@ -12,14 +12,20 @@
 
 ### 0.1 运行环境
 - 项目根：`H:\trajectory-CLIP`；venv：`.venv`（由 conda py313 用 `--system-site-packages` 创建，继承 torch 2.9.1+cu128）。
-- **规范测试命令**（必须用这条，否则会踩下面两个坑）：
+- **规范命令（起服务）**：
   ```bash
   cd H:/trajectory-CLIP
-  PYTHONNOUSERSITE=1 PYTHONPATH="H:/trajectory-CLIP/.venv/Lib/site-packages" .venv/Scripts/python.exe -m pytest -q
+  PYTHONPATH="H:/trajectory-CLIP/.venv/Lib/site-packages" .venv/Scripts/python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000
   ```
-- 两个环境坑（已定位，用上面的环境变量绕过）：
-  1. `C:\Users\Administrator\AppData\Roaming\Python\Python313\site-packages` 里的 `langsmith` pytest 插件会 import 失败的 `requests_toolbelt`，导致**整个测试会话崩溃**。→ `PYTHONNOUSERSITE=1` 移除该路径。
-  2. `F:\Anaconda_envs\envs\py313`（env 根目录，在 sys.path 中**早于** `.venv/Lib/site-packages`）里有一个散落的 `typing_extensions.py`，缺 `sentinel`，会让 `fastapi.testclient` 导入失败。→ 用 `PYTHONPATH` 前置 venv 的 site-packages 覆盖它。
+- **规范命令（跑测试）**：测试额外需要禁掉一个坏插件，故多一个变量：
+  ```bash
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH="H:/trajectory-CLIP/.venv/Lib/site-packages" .venv/Scripts/python.exe -m pytest -q
+  ```
+- 三个环境坑与解法（已定位并实测）：
+  1. `F:\Anaconda_envs\envs\py313`（env 根目录，在 sys.path 中**早于** `.venv/Lib/site-packages`）里有一个散落的 `typing_extensions.py`，缺 `sentinel`，会让 `fastapi` 导入失败。→ 用 **`PYTHONPATH` 前置 venv 的 site-packages** 覆盖它。
+  2. 用户级目录 `C:\Users\Administrator\AppData\Roaming\Python\Python313\site-packages` 里有个坏掉的 `langsmith` pytest 插件（import 缺失的 `requests_toolbelt`），会让**整个测试会话崩溃**。→ 测试时加 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`。
+  3. ⚠️ **`cn_clip` 只存在于上述用户级目录**（venv 里没有，`requirements.txt` 里也没声明）。因此**绝不能用 `PYTHONNOUSERSITE=1`** —— 那会把它一起移除，导致 CLIP 检索**静默退化**为纯属性排序（候选 `clip_score` 恒为 `0.0`，后端日志报 `No module named 'cn_clip'`）。
+- ⚠️ **本节曾记录过一条错误命令**（含 `PYTHONNOUSERSITE=1`）。它在测试场景下看似正常（测试照样全绿，因为检索会优雅降级），但**起服务时会静默关掉 CLIP**。主 agent 是在实测 `/search/query` 发现候选 `clip_score` 全为 `0.0`、再查后端日志才定位到的。**已更正并改用上面的命令复跑全部验收**：pytest 仍为 `13 failed, 335 passed`，失败集合与基线逐条一致；改用正确命令后 CLIP 恢复（`Chinese-CLIP ViT-B-16 模型加载成功, device=cuda`，候选 `clip_score` 为真实的 0.4275 / 0.4279 / 0.4213，融合 `final = 0.6*clip + 0.4*attr` 真实生效）。
 - 新增 `pytest.ini`：设 `testpaths = tests`。**没有它时裸跑 `pytest` 会递归扫描 `.venv/` 和 `output/`，仅收集阶段就要 438 秒**（实测）。
 - 环境瑕疵（已知、未处理）：`.venv` 里存在 numpy 2.5.3（随 streamlit/pandas 拉入），但 sys.path 解析时 py313 的 numpy 2.3.3 优先，torch 正常工作（已验证 `torch<->numpy` 数据通路）。`pip uninstall numpy` 被 pip 拒绝（目标在 venv 外），`rm -rf` 被权限拒绝，故保留现状。
 - 另有 6 个测试因**缺 scipy** 失败。用户约束明确"不装 scipy"，故**不安装**，保留失败（见 0.2）。
@@ -62,6 +68,19 @@
 - **准确结论**：它仍被活代码路径引用（`dashboard.py:31`；另在 `camera_manager.py:38`、`road_topology.py:37` 的用法示例里出现），但**不是 load-bearing**——删掉不会让接口失效，只会静默切到兜底分支。**保留依然正确**（仍被引用 + 原计划理由不成立），但保留理由要写成这个准确的版本。
 - 处置不变：**文件未删**。
 
+**更正 C：我一度把「唯一需要兜底的字段」收窄错了，漏掉一个实测可达的崩溃**
+- 我向子 agent 传达「`inference_segments[].actual_travel_time` 是唯一需要新增兜底的地方」——**该结论只在 `auto` 模式下成立**。
+- 来源：任务 6 的 agent 给了一份 null 清单，但它**只测了 `auto`**；我误当作全量结论转达。
+- 子 agent **没有照单接受，改为自己实测 `mode="stitch"`**，发现两种模式的 null 集合**不同**。**主 agent 已独立复核，确认子 agent 正确**：
+  ```
+  auto   : inference_segments[].actual_travel_time = None（4 段中 3 段）
+  stitch : observation_nodes[].confidence = [0.7822, None, 0.7779]  ← 真正的 None
+           identity.vehicle_id / evidence.vehicle_id = None
+           inference_segments[].actual_travel_time = [4.8, 3.201]   ← 反而不是 None
+  ```
+- **后果**：`observation_nodes[].confidence` 会被当数字格式化（`trajectory.py:547`、`timeline.py:491`、`timeline.py:593`、`confidence_color/label`），子 agent **实测复现出第二处崩溃**（PDF 与 Excel 导出各一处）。若按我的错误收窄执行，**这处会被漏掉**。
+- 处置：保留子 agent 的完整 sweep。它同时把改动**如实分档**为「A 档 = 实测可达的真修复」与「B 档 = 理论风险 / 零行为变更的防御性兜底」（B 档附 17 组新旧对比，全部 `SAME`），**这个分档被原样保留在交付报告中**。
+
 **更正 B：`.dockerignore` 并未被覆盖，是我看错了**
 - 我先前称「该文件在派活前已存在，被 Agent B 覆盖、原内容可能丢失」——**这是错的**。
 - Agent B 的证据链：其 `Write` 返回的是 `File created successfully`；而本 harness 对「未先 Read 就覆盖已存在文件」是**直接拒绝**的——能写入即证明当时文件不存在。
@@ -88,6 +107,38 @@
 - **本次未统一**（属上游数据重建问题：需要重跑特征提取管线，成本高且不在 9 个任务范围内）。**列入交付报告头号遗留项**。
 
 > 附：主 agent 曾向子 agent 断言「JSON 里没有 clip_vector」——**该断言错误**，子 agent 实测反证并正确使用了内联向量。已更正。
+
+---
+
+### 0.6 ⚠️ 尚未清理的「编造数据」点（与任务 2 同类问题，**未修**）
+
+任务 2 删掉了后端的伪回溯（`random` 伪造时间戳/置信度），但**同类"编造看似合理的数值"的做法在前端仍系统性存在**，且**任务 2 的原则并未覆盖到它们**：
+
+**实测 grep 取证 —— `frontend/` 下 9 处在数据缺失时凭空填入置信度：**
+```
+frontend/pages/timeline.py:439   node.get("confidence", 0.9)
+frontend/pages/timeline.py:531   node.get("confidence", 0.9)
+frontend/pages/timeline.py:602   inf.get("confidence", 0.7)
+frontend/utils.py:164            ... .get("quality_score", 0.8)
+frontend/utils.py:180            first_frame.get("confidence", 0.85)
+frontend/utils.py:417            node.get("confidence", 0.9)
+frontend/utils.py:444            src.get("confidence", 0.9)
+frontend/utils.py:466            seg.get("confidence", 0.7)
+frontend/utils.py:497            path.get("confidence", 0.5)
+```
+
+**为什么这条重要（不只是洁癖）**：
+1. 这些**编造值会掩盖诚实留空**。本轮刚给 `confidence_color()` / `confidence_label()` 加了 `None` 处理（返回中性色 / `"未知"`，不冒充"低置信度"），但上述站点在**值到达它们之前就已经把 `None` 换成了 `0.9`** —— 于是"未知"这条诚实路径**永远触发不了**，UI 上显示的是一个看起来像真实测量的 `0.9`。
+2. 与任务 2 删掉的后端伪回溯**性质完全相同**：都是"没有依据时造一个像样的数字"。**只删了后端那一半。**
+3. `map_view.py:73-74`（摄像头无坐标时按索引伪造 lat/lon 偏移）同属此类。
+
+**同类还有两处"编造观测"**（主 agent 读代码确认）：
+- `frontend/utils.py:193-194`：`_convert_trajectory_response()` 对每个摄像头凭空写 `entry_description: "从画面进入"` / `exit_description: "从画面离开"` —— 而任务 2 已让后端在这些无真实标注的字段上**诚实返回空串 `""`**。前端适配器**又把描述编了回来**，等于断言了一个并未观测到的事实。
+- `frontend/pages/map_view.py:73-74`：摄像头无坐标时按索引伪造 lat/lon 偏移，好让点能画在地图上。
+
+**另一个结构性发现**：`api_backtrack`（即 `/trace` 端点）在 `frontend/` 里**只被 import、从未被调用**（`confirm.py:19`、`search.py:20` 是 import 语句）。前端实际走的是 `api_trajectory`（`/trajectory` 端点）+ `_convert_trajectory_response` 适配。这解释了为什么本轮给 `/trace` 带来的跨镜改进**不会自动反映到前端**，也解释了前端那两处格式化崩溃为何"函数级可复现、UI 级到不了"。
+
+**未修原因**：超出 PLAN.md 九项任务范围，HANDOFF §9.2 明确要求"发现额外问题写进遗留项，不擅自扩范围"。**列入交付报告遗留项，并建议作为后续第一优先级**（与项目目标"诚实"直接冲突）。
 
 ---
 
@@ -264,6 +315,8 @@ idle ──search──► searched(query_id)
   2. 前端仍有 4 处直读 107MB `output/cityflow_results.json`（均**非检索**）：`frontend/utils.py:656`、`frontend/pages/search.py:625/697`、`frontend/pages/dashboard.py:26`、**`frontend/home.py:25,59`**（首页统计）→ 交任务 4
   3. `_CITYFLOW_CROPS_DIR`（`utils.py:647`）改动前即无引用，属既有死代码，未动
   4. `search.py:970` 的 `cand.get("data_source") == "cityflow"` 分支现已不可能命中（后端候选不带该字段），无害死分支，未动
+  5. ⚠️ **`frontend/pages/map_view.py:73-74`：摄像头无坐标时，按索引伪造 lat/lon 偏移** —— 这是**与任务 2 删掉的伪回溯同一性质的"编造数据"**（为了让点能画在地图上而凭空造坐标）。子 agent 如实上报，因超出「只修 None 格式化」范围**未改**。**列入交付报告遗留项**，建议后续按任务 2 的原则处理（无坐标就如实标注不可定位，而不是造一个假坐标）
+  6. 子 agent 的诚实边界声明（值得保留）：`candidate_paths` / `observation_nodes` 等的 `None` 兜底是**用注入 null 的方式验证**的（合成验证），**不是**真实数据实测复现；而 `actual_travel_time` 相关几处的崩溃是**在真实 `/trace` 响应上实测复现**的。两类证据被明确区分，未混为一谈
 
 ---
 
@@ -394,6 +447,8 @@ idle ──search──► searched(query_id)
 
 > 每次修改在此追加一条，格式：`日期 — 任务# — 一句话说明改了什么/没改什么`。
 
+- 2026-09-11 — ⚠️ **主 agent 自纠**：先前在 §0.1 给出的规范命令含 `PYTHONNOUSERSITE=1`，会把**只存在于用户级 site-packages 的 `cn_clip` 一并移除**，导致 CLIP 检索**静默退化为纯属性排序**（`clip_score` 恒 0.0，接口仍 200，极难察觉）。这是在实测 `/search/query` 时发现候选 `clip_score` 全为 `0.0`、查后端日志见到 `No module named 'cn_clip'` 才定位的。**更正为只用 `PYTHONPATH`**（测试另加 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`），并**用新命令复跑全部验收**：pytest 仍 `13 failed, 335 passed`（失败集合与基线一致），CLIP 恢复（`ViT-B-16 模型加载成功, device=cuda`，`clip_score` 真实值 0.4275 等，融合 `0.6*clip+0.4*attr` 生效）。**结论：此前所有验收数字在两套命令下一致，结论不变；但"CLIP 路径是否真的在跑"这一项此前未被真正验证过，现已验证并确认可用。**
+- 2026-09-11 — 波次2 追加修复 — 主 agent 实测发现：任务 6 让 `inference_segments` 非空后，`actual_travel_time`（诚实为 `None`）会令 `frontend/pages/trajectory.py` 的 Excel 导出抛 `TypeError`（`dict.get(k, 0)` 兜不住「键存在、值为 None」）。已修复：`frontend/utils.py` 新增 `is_number`/`safe_number`/`format_number`（缺依据显示 `--` 而非编造 0），共 **29 处**格式化点改为显式判空，另给出 7 处「判定为非风险」的依据清单。验证：pytest `13 failed, 335 passed` 失败集合与基线一致；冒烟 **15/15**。
 - 2026-09-11 — 波次2 — 任务 5 完成（`frontend/utils.py` 1374→703 行，删净本地 CLIP/BLIP 管线，检索收敛为后端一处）；任务 6 完成（新增 `src/trajectory/builder.py`，`src/stitching` **首次线上生效**；`/trace` 由单摄像头退化为**跨摄像头**：`['c040']` → `['c004','c005','c003','c002','c001']`，`inference_segments` 由恒空变为有内容，`overall_confidence` 由硬编码 0.0 变为真实 0.3411，每段新增 `basis` 标注）。pytest `13 failed, 335 passed`，失败集合与基线逐条一致；**冒烟 15/15**（含真实拉起 Streamlit 并探活 `/_stcore/health`）。
 - 2026-09-11 — 波次2 新发现 — ① **项目存在两套不兼容的 CLIP 特征空间**（512/ViT-B-16 覆盖 100% vs 768/ViT-L-14 覆盖 1.39%），配置声明与实际不符，见 §0.5；② **属性标注噪声极大**：同一车辆 `vehicle_type`/`color` 跨摄像头乃至单摄像头内部自相矛盾（已实测 `V0034`），同时损害检索过滤与拼接评分；③ 实测确认 `actual_travel_time=None` 会令前端 Excel 导出抛 `TypeError`，已派修。
 - 2026-09-11 — 任务#9 — `git init` + 首提交 `a155f0a`（180 文件，最大 92KB），建立版本保护；`.gitignore` 排除 output/models/cityflow/qdrant_storage 等大目录。**未改任何源码**。

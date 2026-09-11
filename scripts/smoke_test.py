@@ -5,10 +5,15 @@ scripts.smoke_test - 前后端冒烟测试
 并对前端模块做可导入性检查。逐项打印通过/失败，最后给出汇总。
 
 启动服务（另开一个终端）:
-    .venv/Scripts/python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+    PYTHONPATH="H:/trajectory-CLIP/.venv/Lib/site-packages" \\
+        .venv/Scripts/python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 
 运行本脚本:
-    .venv/Scripts/python.exe scripts/smoke_test.py [--base-url http://127.0.0.1:8000]
+    .venv/Scripts/python.exe scripts/smoke_test.py [--base-url http://127.0.0.1:8000] [--frontend]
+
+注意：**不要**给服务加 `PYTHONNOUSERSITE=1`。`cn_clip` 只安装在用户级
+site-packages 里，加了这个变量会让 CLIP 检索静默退化成纯属性排序
+（候选 clip_score 恒为 0.0），而接口仍返回 200，很难察觉。
 """
 
 from __future__ import annotations
