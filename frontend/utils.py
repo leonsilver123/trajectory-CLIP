@@ -7,7 +7,6 @@ frontend.utils - 前端工具函数
 
 from __future__ import annotations
 
-import json
 import logging
 import numbers
 import os
@@ -20,6 +19,12 @@ import requests
 # torch 目前在本模块内已无使用点（原 BLIP 精排所依赖），但按部署约定保留导入：
 # Dockerfile.frontend 已装 torch(CPU)，去掉导入会让镜像依赖与代码不一致。
 import torch
+
+from src.storage.datastore import (
+    get_stats as datastore_get_stats,
+    has_data as datastore_has_data,
+    load_results,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -690,42 +695,29 @@ CAMERA_NAME_MAP = _load_camera_name_map()
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _OUTPUT_DIR = _PROJECT_ROOT / "output"
-_CITYFLOW_RESULTS_JSON = _OUTPUT_DIR / "cityflow_results.json"
-_CITYFLOW_CROPS_DIR = _OUTPUT_DIR / "cityflow_crops"
 
 # 说明：颜色/车型 ID→中文名的映射表原为本地检索管线所用，检索改为调用后端后已无用例，
 # 故随之删除（后端 api/routes/search.py 自带 _filter_business_attributes 做同样的中文化）。
 
-
-_cityflow_cache: Optional[Dict[str, Any]] = None
-_cityflow_cache_mtime: float = 0.0
+# 说明：本模块原先自己开文件读 107MB 的 cityflow_results.json（另有 mtime 缓存），
+# 与 api/、src/ 里的几处读取各自独立。现统一收敛到 src.storage.datastore：
+# 优先读 output/datastore/ 的 Parquet + SQLite，缺失时自动回退 JSON 直读。
+# 这里只保留薄封装，供前端页面沿用原有函数名调用。
 
 
 def load_cityflow_results() -> Optional[Dict[str, Any]]:
-    """加载 CityFlow 预处理结果（带内存缓存，避免每次检索重复读取 90MB+ JSON）"""
-    global _cityflow_cache, _cityflow_cache_mtime
-    if not _CITYFLOW_RESULTS_JSON.exists():
-        _cityflow_cache = None
-        return None
-    try:
-        current_mtime = _CITYFLOW_RESULTS_JSON.stat().st_mtime
-        if _cityflow_cache is not None and current_mtime == _cityflow_cache_mtime:
-            return _cityflow_cache
-        t0 = __import__('time').time()
-        with open(_CITYFLOW_RESULTS_JSON, "r", encoding="utf-8") as f:
-            _cityflow_cache = json.load(f)
-        _cityflow_cache_mtime = current_mtime
-        logger.info(f"CityFlow 数据加载完成，共 {len(_cityflow_cache.get('detections', []))} 条检测，耗时 {__import__('time').time()-t0:.1f}s")
-        return _cityflow_cache
-    except Exception as e:
-        logger.warning(f"加载 CityFlow 结果失败: {e}")
-        _cityflow_cache = None
-        return None
+    """加载 CityFlow 预处理结果（统一走 src.storage.datastore，带进程内缓存）"""
+    return load_results()
 
 
 def has_cityflow_results() -> bool:
-    """检查是否有 CityFlow 数据"""
-    return _CITYFLOW_RESULTS_JSON.exists()
+    """检查是否有 CityFlow 数据（datastore 或 JSON 任一在位）"""
+    return datastore_has_data()
+
+
+def get_cityflow_stats() -> Dict[str, Any]:
+    """轻量统计（检测数/轨迹数/摄像头数）——datastore 在位时不解析大文件"""
+    return datastore_get_stats()
 
 
 # 说明：本地查询解析（_parse_cityflow_query）及其专用的颜色/车型同义词表、

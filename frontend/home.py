@@ -7,13 +7,15 @@ frontend.home - 交通态势工作台（浅色主题）
 
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+
+# CityFlow 数据统一走 src.storage.datastore（优先 Parquet + SQLite，缺失时回退 JSON 直读），
+# 本模块先前单独开文件读 107MB JSON，现已收敛。
+from src.storage.datastore import get_stats as _cityflow_stats
 
 # render_icon 不再需要（快捷操作按钮改用 Unicode 图标，避免 SVG 在 st.button 中泄露 HTML）
 # from frontend.components import render_icon
@@ -21,8 +23,6 @@ import streamlit as st
 # ============================================================
 # 数据加载（预留 API 接口）
 # ============================================================
-
-_CITYFLOW_RESULTS_JSON = Path(__file__).resolve().parent.parent / "output" / "cityflow_results.json"
 
 
 def _load_dashboard_stats() -> dict:
@@ -55,24 +55,15 @@ def _load_dashboard_stats() -> dict:
     except Exception:
         pass
 
-    # 尝试从 CityFlow 数据获取
-    if _CITYFLOW_RESULTS_JSON.exists():
-        try:
-            with open(_CITYFLOW_RESULTS_JSON, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            detections = data.get("detections", [])
-            stats["today_detections"] = len(detections)
-            stats["active_tracks"] = len(data.get("tracks", []))
-            # 从检测结果中提取摄像头信息
-            camera_ids = set()
-            for det in detections:
-                cam_id = det.get("camera_id", "")
-                if cam_id:
-                    camera_ids.add(cam_id)
-            stats["cameras_total"] = len(camera_ids) if camera_ids else 0
-            stats["cameras_online"] = stats["cameras_total"]
-        except Exception:
-            pass
+    # 后端不可用 → 从本地数据统计（datastore 在位时为毫秒级元数据查询，不解析大 JSON）
+    try:
+        local = _cityflow_stats()
+        stats["today_detections"] = local.get("detections", 0)
+        stats["active_tracks"] = local.get("tracks", 0)
+        stats["cameras_total"] = local.get("cameras", 0)
+        stats["cameras_online"] = stats["cameras_total"]
+    except Exception:
+        pass
 
     return stats
 

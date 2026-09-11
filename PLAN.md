@@ -176,7 +176,7 @@ idle ──search──► searched(query_id)
 | 1 | 后端会话状态机 | P0 | [x] |
 | 2 | 删除伪回溯，只留真实聚合 | P0 | [x] |
 | 3 | ID 解析收敛成唯一函数 | P0 | [x] 全仓 4 处已收敛，`startswith("V")` 零命中 |
-| 4 | 数据契约落盘，在线不读大 JSON | P1 | [ ] |
+| 4 | 数据契约落盘，在线不读大 JSON | P1 | [x] datastore 落盘（12.4MB vs 102.6MB）；回退路径已实测 |
 | 5 | 检索管线收敛成一条 | P1 | [x] 前端本地 CLIP/BLIP 管线已删（-592 行），检索只剩后端一处 |
 | 6 | 跨镜拼接统一到 TrajectoryBuilder | P1 | [x] `/trace` 已由单摄像头变为跨摄像头；`src/stitching` 首次线上生效 |
 | 7 | 删死代码 | P2 | [x] |
@@ -280,14 +280,43 @@ idle ──search──► searched(query_id)
 
 ## 五、P1 —— 架构对齐
 
-### 任务 4：数据契约落盘，在线不读大 JSON　— 状态：`[ ]`
+### 任务 4：数据契约落盘，在线不读大 JSON　— 状态：`[x]`
 
 - 新建 `scripts/build_datastore.py`（JSON → SQLite 元数据 + Parquet detections 表 + 独立向量文件）
 - 新建 `src/storage/datastore.py`（统一读写接口）
 - 改 `api/routes/search.py` / `backtrack.py` / `frontend/utils.py`（改走 datastore，删散落的 `json.load` + mtime 缓存）
-- 验收：[ ] 在线首查不加载 90MB JSON；[ ] `load_cityflow_results()` 等散落函数收敛为一处
+- 验收：[x] 在线首查不加载 90MB JSON；[x] `load_cityflow_results()` 等散落函数收敛为一处
 
-**变更记录**：尚无（未开始）。
+**变更记录**：
+- 已修改：
+  - 新建 `src/storage/datastore.py`（**唯一读取层**，对外 `load_results/load_detections/get_summary/get_stats/data_source/has_data/reset_cache`）、`src/storage/__init__.py`
+  - 新建 `scripts/build_datastore.py`（离线构建 + 校验，含 `--verify-only`）
+  - 新建 `tests/test_datastore.py`（23 例）
+  - **5 处散落读取点全部收敛**：`api/routes/search.py`、`api/routes/dashboard.py`（`/health` 新增 `data_source` 字段，**只加不删**）、`src/trajectory/builder.py`、`frontend/utils.py`、`frontend/home.py`
+  - **数据布局**：`output/datastore/{detections.parquet, tracks.parquet, det_image_vectors.npy, det_text_vectors.npy, det_vector_rows.npy, det_text_vector_rows.npy, meta.sqlite}`，**12.37 MB vs 源 JSON 102.63 MB（小 8.3 倍）**
+- **核心安全设计（叠加式，已实测）**：datastore **存在则用、不存在则回退 JSON**，行为与改造前一致。**主 agent 独立演练过回退**：
+  ```
+  改名前 : /dashboard/health → data_source="datastore"
+  mv 走  : data_source="json"  results_loaded=true
+           全量冒烟 14/14 通过（跑在回退路径上）
+  mv 回  : data_source="datastore"
+  ```
+  演练包在 bash `trap` 内，目录不可能被遗留为改名状态（已确认 7 个文件齐全）
+- **实测性能（子 agent 自测，**纠正了主 agent 的误导性数字**）**：
+  - 主 agent 原型给出的「28 倍」是**裸 parquet 读取**的对比，**对线上不成立**。
+  - 子 agent 实测线上 `load_results()`：datastore 热读中位 **0.482s** vs JSON 直读 **1.250s** vs 裸 `json.load` **1.288s** → **实际约 2.6 倍**。
+  - 原因（子 agent 解释，主 agent 认可）：线上必须物化 68349 个同结构 dict，这份成本两条路都要付；datastore 省掉的只是 JSON 词法解析的约 0.77s。
+  - **子 agent 明确拒绝引用我给的原型数字，坚持自测** —— 这正是要求的诚实标准。
+- **保真度取舍（子 agent 主动说明）**：Parquet 无法区分「键不存在」与「键值为 null」，而源数据在 `bbox_size`/`color_analysis`/`dominant_color_rgb`（949 行）与 tracks 的 `attributes`（1779 行）上依赖该区分。为保持 `==` 级等价，对真缺键的列用 Arrow null bitmap，对「键在值为 null」的列另写存在性列表；代价约 +0.15s/次、+1.17MB。**不这么做会返回源数据里没有的 `None` 键 = 破坏契约**
+- **主 agent 独立复核**：
+  - pytest `13 failed, 358 passed`（+23 = 新增测试），失败集合与基线 `comm` 逐个一致（0 回归）
+  - 读取点收敛 grep：`api/`、`src/`、`frontend/` 下**除 `src/storage/datastore.py` 外无人 `open()` 该 JSON**；唯一那处 `json.load` 只有两个调用方（回退分支 + 离线工具包装）
+  - `/dashboard/health` 实测 `data_source="datastore"`
+  - 冒烟 **15/15**（含真实拉起 Streamlit）
+- **遗留**：
+  1. **`output/datastore/` 被 `.gitignore` 忽略** → 是**本机产物，不进版本库**。部署到新机器需跑一次 `scripts/build_datastore.py`（**不跑也能用**，走 JSON 回退，只是慢）
+  2. `output/` 下留有子 agent 的临时文件（`_proto/`、`_fallback_check.py`、`_bench_read.py`、若干验收证据 txt、`_backup_task4/`），删除被**权限系统拒绝**，未清理（都在 `output/` 内且已被 gitignore，不影响运行）
+  3. 子 agent 的观察（已记录未修）：`/trace` 的 `inference_segments[].basis` 标为 `strong_identity` 而非 `probabilistic_inference` —— 语义上推断段更宜标后者。`backtrack.py` 在禁改清单内，未动
 
 ---
 
@@ -447,6 +476,8 @@ idle ──search──► searched(query_id)
 
 > 每次修改在此追加一条，格式：`日期 — 任务# — 一句话说明改了什么/没改什么`。
 
+- 2026-09-11 — 任务#4 — datastore 落盘完成：新增 `src/storage/datastore.py`（唯一读取层）+ `scripts/build_datastore.py` + `tests/test_datastore.py`；5 处散落 JSON 读取点全部收敛；`output/datastore/` 12.37MB vs 源 JSON 102.63MB。**叠加式设计（存在则用、不存在回退 JSON），回退路径经主 agent 独立演练：`mv` 走后 `data_source="json"` 且全量冒烟 14/14 通过，`mv` 回后 `data_source="datastore"`**。实测加速 **2.6 倍**（子 agent 自测，**纠正了主 agent 原型给出的误导性 28 倍**——那只是裸 parquet 读取，线上需物化 68349 个同结构 dict）。pytest `13 failed, 358 passed` 失败集合与基线一致；冒烟 **15/15**。
+- 2026-09-11 — ⚠️ 复核中发现子 agent 一次 `git stash` 未 pop，任务 4 成果一度全部躺在 stash 里。已只读核查确认 9 个文件（1454 insertions）完整可恢复，**未擅自操作其 stash**，交由该 agent 自行 pop；恢复后复跑验证通过。**教训：用 `git stash` 取基线是全局单例操作，用完不 pop 等于清空工作区；应改用 `git show HEAD:<path>` 或 `git worktree`。**
 - 2026-09-11 — ⚠️ **主 agent 自纠**：先前在 §0.1 给出的规范命令含 `PYTHONNOUSERSITE=1`，会把**只存在于用户级 site-packages 的 `cn_clip` 一并移除**，导致 CLIP 检索**静默退化为纯属性排序**（`clip_score` 恒 0.0，接口仍 200，极难察觉）。这是在实测 `/search/query` 时发现候选 `clip_score` 全为 `0.0`、查后端日志见到 `No module named 'cn_clip'` 才定位的。**更正为只用 `PYTHONPATH`**（测试另加 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`），并**用新命令复跑全部验收**：pytest 仍 `13 failed, 335 passed`（失败集合与基线一致），CLIP 恢复（`ViT-B-16 模型加载成功, device=cuda`，`clip_score` 真实值 0.4275 等，融合 `0.6*clip+0.4*attr` 生效）。**结论：此前所有验收数字在两套命令下一致，结论不变；但"CLIP 路径是否真的在跑"这一项此前未被真正验证过，现已验证并确认可用。**
 - 2026-09-11 — 波次2 追加修复 — 主 agent 实测发现：任务 6 让 `inference_segments` 非空后，`actual_travel_time`（诚实为 `None`）会令 `frontend/pages/trajectory.py` 的 Excel 导出抛 `TypeError`（`dict.get(k, 0)` 兜不住「键存在、值为 None」）。已修复：`frontend/utils.py` 新增 `is_number`/`safe_number`/`format_number`（缺依据显示 `--` 而非编造 0），共 **29 处**格式化点改为显式判空，另给出 7 处「判定为非风险」的依据清单。验证：pytest `13 failed, 335 passed` 失败集合与基线一致；冒烟 **15/15**。
 - 2026-09-11 — 波次2 — 任务 5 完成（`frontend/utils.py` 1374→703 行，删净本地 CLIP/BLIP 管线，检索收敛为后端一处）；任务 6 完成（新增 `src/trajectory/builder.py`，`src/stitching` **首次线上生效**；`/trace` 由单摄像头退化为**跨摄像头**：`['c040']` → `['c004','c005','c003','c002','c001']`，`inference_segments` 由恒空变为有内容，`overall_confidence` 由硬编码 0.0 变为真实 0.3411，每段新增 `basis` 标注）。pytest `13 failed, 335 passed`，失败集合与基线逐条一致；**冒烟 15/15**（含真实拉起 Streamlit 并探活 `/_stcore/health`）。

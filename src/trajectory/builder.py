@@ -30,7 +30,6 @@ src.trajectory.builder - 跨镜轨迹构建器
 
 from __future__ import annotations
 
-import json
 import math
 import uuid
 from collections import defaultdict
@@ -52,6 +51,7 @@ from src.common.data_models import (
 from src.common.ids import extract_vehicle_id, parse_track_id
 from src.common.logger import get_logger
 from src.common.utils import haversine_distance
+from src.storage.datastore import load_results
 from src.stitching.candidate_edge import CandidateEdgeGenerator
 from src.stitching.observation_chain import ObservationChainBuilder
 from src.stitching.scoring import CrossCameraScorer
@@ -320,17 +320,23 @@ class TrajectoryBuilder:
         return self._loaded
 
     def _load(self) -> None:
-        """从 cityflow_results.json 加载检测记录并建立各类索引"""
-        if not self._results_path.exists():
-            logger.warning("CityFlow 结果文件不存在: %s", self._results_path)
+        """
+        加载检测记录并建立各类索引
+
+        数据统一由 src.storage.datastore 提供：优先读 output/datastore/ 的
+        Parquet + SQLite，datastore 缺失时自动回退 cityflow_results.json 直读，
+        两条路径返回的结构完全一致（该模块的 verify 会逐字段比对）。
+        """
+        try:
+            data = load_results(str(self._results_path))
+        except Exception as e:  # 文件损坏 / 编码异常都不应让接口 500
+            logger.error("加载 CityFlow 结果数据失败: %s", e)
             self._load_failed = True
             return
 
-        try:
-            with open(self._results_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception as e:  # 文件损坏 / 编码异常都不应让接口 500
-            logger.error("加载 CityFlow 结果文件失败: %s", e)
+        if data is None:
+            logger.warning("CityFlow 结果数据不可用（datastore 与 JSON 均缺失）: %s",
+                           self._results_path)
             self._load_failed = True
             return
 

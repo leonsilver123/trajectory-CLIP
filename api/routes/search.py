@@ -5,7 +5,8 @@ api.routes.search - 检索 API v2（支持CLIP向量二次召回）
 - POST /api/v1/search/query  文本查询检索候选目标（属性粗筛 + CLIP精排）
 - POST /api/v1/search/plate  车牌精确查询
 
-数据来源: output/cityflow_results.json（包含detections、tracks、det_to_track_map）
+数据来源: src.storage.datastore（优先读 output/datastore/ 的 Parquet + SQLite，
+缺失时自动回退 output/cityflow_results.json 直读，见该模块说明）
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from pydantic import BaseModel
 
 from src.common.logger import get_logger
 from src.common.session_store import get_session_store
+from src.storage.datastore import load_results
 
 logger = get_logger("api.routes.search")
 
@@ -32,7 +34,6 @@ router = APIRouter()
 # 项目根目录与结果文件路径
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _OUTPUT_DIR = _PROJECT_ROOT / "output"
-_RESULTS_JSON = _OUTPUT_DIR / "cityflow_results.json"
 _CLIP_INDEX_FILE = _OUTPUT_DIR / "clip_vectors.faiss"
 _TRACK_CLIP_INDEX_FILE = _OUTPUT_DIR / "track_clip_vectors.faiss"
 _CAMERA_METADATA_PATH = _PROJECT_ROOT / "configs" / "cityflow_camera_metadata.yaml"
@@ -76,15 +77,8 @@ class SearchResponse(BaseModel):
 
 
 def _load_results() -> Optional[Dict[str, Any]]:
-    """加载 output/cityflow_results.json"""
-    if not _RESULTS_JSON.exists():
-        return None
-    try:
-        with open(_RESULTS_JSON, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.warning(f"加载 cityflow_results.json 失败: {e}")
-        return None
+    """加载检测结果（统一走 src.storage.datastore，datastore 缺失时自动回退 JSON）"""
+    return load_results()
 
 
 def _load_clip_index() -> Optional[Any]:

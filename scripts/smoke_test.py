@@ -192,6 +192,7 @@ def test_frontend_runtime(port: int = 8501) -> None:
     以子进程方式启动 frontend/app.py，轮询 Streamlit 自带健康端点 /_stcore/health，
     无论成败都会回收子进程。
     """
+    import os
     import subprocess
     import time
 
@@ -201,11 +202,21 @@ def test_frontend_runtime(port: int = 8501) -> None:
         _record("streamlit 启动", False, f"入口不存在: {app_path}")
         return
 
+    # 子进程不会自动继承"规范调用方式"，必须显式把 venv 的 site-packages 前置到
+    # PYTHONPATH：否则 typing_extensions 会解析到 conda env 里那个缺 sentinel 的
+    # 残缺副本，anyio/starlette 导入失败，streamlit 直接起不来（现象是健康检查一直不 200）。
+    # 这里自行构造，保证本脚本无论被怎样调用都能正确拉起前端。
+    child_env = dict(os.environ)
+    venv_site = str(_PROJECT_ROOT / ".venv" / "Lib" / "site-packages")
+    existing = child_env.get("PYTHONPATH", "")
+    child_env["PYTHONPATH"] = venv_site + (os.pathsep + existing if existing else "")
+
     proc = subprocess.Popen(
         [sys.executable, "-m", "streamlit", "run", str(app_path),
          "--server.port", str(port), "--server.headless=true",
          "--server.address", "127.0.0.1"],
-        cwd=str(_PROJECT_ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        cwd=str(_PROJECT_ROOT), env=child_env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     healthy = False
     detail = ""
@@ -233,6 +244,15 @@ def test_frontend_runtime(port: int = 8501) -> None:
         except Exception:
             try:
                 proc.kill()
+            except Exception:
+                pass
+        # 失败时把子进程输出带出来，否则只剩一句"未就绪"，无法定位原因
+        if not healthy and proc.stdout is not None:
+            try:
+                tail = proc.stdout.read() or ""
+                last = [ln for ln in tail.strip().splitlines() if ln.strip()][-6:]
+                if last:
+                    detail += " | 子进程输出尾部: " + " ⏎ ".join(last)
             except Exception:
                 pass
 

@@ -6,12 +6,12 @@ api.routes.dashboard - 仪表盘 API
 - GET /api/v1/dashboard/cameras   摄像头列表
 - GET /api/v1/dashboard/health    服务健康状态
 
-数据来源: output/results.json + configs/camera_metadata.yaml
+数据来源: src.storage.datastore（优先 Parquet + SQLite，缺失时回退 JSON 直读）
+          + configs/camera_metadata.yaml
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -19,6 +19,7 @@ from fastapi import APIRouter
 
 from src.common.config import get_config
 from src.common.logger import get_logger
+from src.storage.datastore import data_source, has_data, load_results
 
 logger = get_logger("api.routes.dashboard")
 
@@ -26,21 +27,12 @@ router = APIRouter()
 
 # 项目路径
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_OUTPUT_DIR = _PROJECT_ROOT / "output"
-_RESULTS_JSON = _OUTPUT_DIR / "cityflow_results.json"
 _CAMERA_CONFIG = _PROJECT_ROOT / "configs" / "camera_metadata.yaml"
 
 
 def _load_results() -> Dict[str, Any]:
-    """加载 results.json，不存在则返回空结构"""
-    if not _RESULTS_JSON.exists():
-        return {}
-    try:
-        with open(_RESULTS_JSON, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.warning(f"加载 results.json 失败: {e}")
-        return {}
+    """加载检测结果，不存在则返回空结构（统一走 src.storage.datastore）"""
+    return load_results() or {}
 
 
 def _build_images_from_detections(data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -195,10 +187,13 @@ async def health_status() -> Dict[str, Any]:
     返回各组件的运行状态。
     """
     config = get_config()
-    results_exist = _RESULTS_JSON.exists()
+    # 数据可用性：datastore 或城市流 JSON 任一在位即视为已加载（两者数据等价）
+    results_exist = has_data()
     return {
         "status": "running",
         "version": config.get("system.version", "1.0.0"),
         "device": config.get("system.device", "cuda"),
         "results_loaded": results_exist,
+        # 新增（不改动既有字段）：当前生效的数据来源 datastore / json / none
+        "data_source": data_source(),
     }
