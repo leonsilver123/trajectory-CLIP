@@ -1,14 +1,27 @@
 # ============================================================
-# CityFlow 摄像头元数据配置 (自动生成)
-# 共 46 个摄像头
-# 坐标已转换至苏州仿真区域 (原数据为美国Iowa坐标)
+# CityFlow (AICity22 Track1 MTMC) 摄像头元数据
+# 共 46 个摄像头，分布在 6 个场景 (S01-S06)
+#
+# 位置：数据集【没有】逐摄像头 GPS（AICity22 ReadMe.txt §12），只提供每个
+# 场景的近似中心坐标（真实，指向美国爱荷华州 Dubuque，42.5N 90.7W）。
+# 因此每台摄像头 latitude/longitude 填的是【所属场景的近似中心】，精度为
+# “场景级”而非“摄像头级”——地图上同场景摄像头会重合，这是数据的真实上限，
+# 不编造逐摄像头坐标。（历史版本曾“转换到苏州仿真区域”，属编造，已撤销。）
+# road_segments / adjacency 保持原样。
 # ============================================================
+scene_gps_center:
+  S01: [42.525678, -90.723601]
+  S02: [42.491916, -90.723723]
+  S03: [42.49878, -90.686393]
+  S04: [42.49878, -90.686393]
+  S05: [42.49878, -90.686393]
+  S06: [42.492448, -90.723343]
 
 cameras:
 - camera_id: c001
   name: Scene01-Camera01
-  latitude: 31.326
-  longitude: 120.5764
+  latitude: 42.525678
+  longitude: -90.723601
   direction: 0.0
   covered_road_segment: SEG_S01_001
   lane_direction: northbound
@@ -19,8 +32,8 @@ cameras:
   start_timestamp_sec: 0
 - camera_id: c002
   name: Scene01-Camera02
-  latitude: 31.3258
-  longitude: 120.5768
+  latitude: 42.525678
+  longitude: -90.723601
   direction: 90.0
   covered_road_segment: SEG_S01_001
   lane_direction: eastbound
@@ -31,8 +44,8 @@ cameras:
   start_timestamp_sec: 1.64
 - camera_id: c003
   name: Scene01-Camera03
-  latitude: 31.3254
-  longitude: 120.5766
+  latitude: 42.525678
+  longitude: -90.723601
   direction: 180.0
   covered_road_segment: SEG_S01_001
   lane_direction: southbound
@@ -43,8 +56,8 @@ cameras:
   start_timestamp_sec: 2.049
 - camera_id: c004
   name: Scene01-Camera04
-  latitude: 31.3254
-  longitude: 120.5762
+  latitude: 42.525678
+  longitude: -90.723601
   direction: 270.0
   covered_road_segment: SEG_S01_001
   lane_direction: westbound
@@ -55,8 +68,8 @@ cameras:
   start_timestamp_sec: 2.177
 - camera_id: c005
   name: Scene01-Camera05
-  latitude: 31.3258
-  longitude: 120.576
+  latitude: 42.525678
+  longitude: -90.723601
   direction: 0.0
   covered_road_segment: SEG_S01_001
   lane_direction: northbound
@@ -67,8 +80,8 @@ cameras:
   start_timestamp_sec: 2.235
 - camera_id: c006
   name: Scene02-Camera01
-  latitude: 31.2922
-  longitude: 120.5763
+  latitude: 42.491916
+  longitude: -90.723723
   direction: 0.0
   covered_road_segment: SEG_S02_001
   lane_direction: northbound
@@ -79,8 +92,8 @@ cameras:
   start_timestamp_sec: 0
 - camera_id: c007
   name: Scene02-Camera02
-  latitude: 31.2919
-  longitude: 120.5767
+  latitude: 42.491916
+  longitude: -90.723723
   direction: 90.0
   covered_road_segment: SEG_S02_001
   lane_direction: eastbound
@@ -91,8 +104,8 @@ cameras:
   start_timestamp_sec: 0.061
 - camera_id: c008
   name: Scene02-Camera03
-  latitude: 31.2916
-  longitude: 120.5763
+  latitude: 42.491916
+  longitude: -90.723723
   direction: 180.0
   covered_road_segment: SEG_S02_001
   lane_direction: southbound
@@ -103,8 +116,8 @@ cameras:
   start_timestamp_sec: 0.421
 - camera_id: c009
   name: Scene02-Camera04
-  latitude: 31.2919
-  longitude: 120.5759
+  latitude: 42.491916
+  longitude: -90.723723
   direction: 270.0
   covered_road_segment: SEG_S02_001
   lane_direction: westbound
@@ -115,8 +128,8 @@ cameras:
   start_timestamp_sec: 0.66
 - camera_id: c010
   name: Scene03-Camera01
-  latitude: 31.2988
-  longitude: 120.6126
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 0.0
   covered_road_segment: SEG_S03_001
   lane_direction: northbound
@@ -127,8 +140,8 @@ cameras:
   start_timestamp_sec: 8.715
 - camera_id: c011
   name: Scene03-Camera02
-  latitude: 31.2989
-  longitude: 120.613
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 90.0
   covered_road_segment: SEG_S03_001
   lane_direction: eastbound
@@ -139,8 +152,8 @@ cameras:
   start_timestamp_sec: 8.457
 - camera_id: c012
   name: Scene03-Camera03
-  latitude: 31.2988
-  longitude: 120.6134
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 180.0
   covered_road_segment: SEG_S03_002
   lane_direction: southbound
@@ -151,8 +164,8 @@ cameras:
   start_timestamp_sec: 5.879
 - camera_id: c013
   name: Scene03-Camera04
-  latitude: 31.2989
-  longitude: 120.6138
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 270.0
   covered_road_segment: SEG_S03_002
   lane_direction: westbound
@@ -163,8 +176,8 @@ cameras:
   start_timestamp_sec: 0
 - camera_id: c014
   name: Scene03-Camera05
-  latitude: 31.2988
-  longitude: 120.6142
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 0.0
   covered_road_segment: SEG_S03_003
   lane_direction: northbound
@@ -175,8 +188,8 @@ cameras:
   start_timestamp_sec: 5.042
 - camera_id: c015
   name: Scene03-Camera06
-  latitude: 31.2989
-  longitude: 120.6146
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 90.0
   covered_road_segment: SEG_S03_003
   lane_direction: eastbound
@@ -187,8 +200,8 @@ cameras:
   start_timestamp_sec: 8.492
 - camera_id: c016
   name: Scene04-Camera01
-  latitude: 31.2978
-  longitude: 120.6126
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 0.0
   covered_road_segment: SEG_S04_R0
   lane_direction: northbound
@@ -199,8 +212,8 @@ cameras:
   start_timestamp_sec: 0
 - camera_id: c017
   name: Scene04-Camera02
-  latitude: 31.2978
-  longitude: 120.6131
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 90.0
   covered_road_segment: SEG_S04_R0
   lane_direction: eastbound
@@ -211,8 +224,8 @@ cameras:
   start_timestamp_sec: 14.318
 - camera_id: c018
   name: Scene04-Camera03
-  latitude: 31.2978
-  longitude: 120.6136
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 180.0
   covered_road_segment: SEG_S04_R0
   lane_direction: southbound
@@ -223,8 +236,8 @@ cameras:
   start_timestamp_sec: 29.955
 - camera_id: c019
   name: Scene04-Camera04
-  latitude: 31.2978
-  longitude: 120.6141
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 270.0
   covered_road_segment: SEG_S04_R0
   lane_direction: westbound
@@ -235,8 +248,8 @@ cameras:
   start_timestamp_sec: 26.979
 - camera_id: c020
   name: Scene04-Camera05
-  latitude: 31.2978
-  longitude: 120.6146
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 0.0
   covered_road_segment: SEG_S04_R0
   lane_direction: northbound
@@ -247,8 +260,8 @@ cameras:
   start_timestamp_sec: 25.905
 - camera_id: c021
   name: Scene04-Camera06
-  latitude: 31.2983
-  longitude: 120.6126
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 90.0
   covered_road_segment: SEG_S04_R1
   lane_direction: eastbound
@@ -259,8 +272,8 @@ cameras:
   start_timestamp_sec: 39.973
 - camera_id: c022
   name: Scene04-Camera07
-  latitude: 31.2983
-  longitude: 120.6131
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 180.0
   covered_road_segment: SEG_S04_R1
   lane_direction: southbound
@@ -271,8 +284,8 @@ cameras:
   start_timestamp_sec: 49.422
 - camera_id: c023
   name: Scene04-Camera08
-  latitude: 31.2983
-  longitude: 120.6136
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 270.0
   covered_road_segment: SEG_S04_R1
   lane_direction: westbound
@@ -283,8 +296,8 @@ cameras:
   start_timestamp_sec: 45.716
 - camera_id: c024
   name: Scene04-Camera09
-  latitude: 31.2983
-  longitude: 120.6141
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 0.0
   covered_road_segment: SEG_S04_R1
   lane_direction: northbound
@@ -295,8 +308,8 @@ cameras:
   start_timestamp_sec: 50.853
 - camera_id: c025
   name: Scene04-Camera10
-  latitude: 31.2983
-  longitude: 120.6146
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 90.0
   covered_road_segment: SEG_S04_R1
   lane_direction: eastbound
@@ -307,8 +320,8 @@ cameras:
   start_timestamp_sec: 50.263
 - camera_id: c026
   name: Scene04-Camera11
-  latitude: 31.2988
-  longitude: 120.6126
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 180.0
   covered_road_segment: SEG_S04_R2
   lane_direction: southbound
@@ -319,8 +332,8 @@ cameras:
   start_timestamp_sec: 70.45
 - camera_id: c027
   name: Scene04-Camera12
-  latitude: 31.2988
-  longitude: 120.6131
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 270.0
   covered_road_segment: SEG_S04_R2
   lane_direction: westbound
@@ -331,8 +344,8 @@ cameras:
   start_timestamp_sec: 85.097
 - camera_id: c028
   name: Scene04-Camera13
-  latitude: 31.2988
-  longitude: 120.6136
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 0.0
   covered_road_segment: SEG_S04_R2
   lane_direction: northbound
@@ -343,8 +356,8 @@ cameras:
   start_timestamp_sec: 100.11
 - camera_id: c029
   name: Scene04-Camera14
-  latitude: 31.2988
-  longitude: 120.6141
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 90.0
   covered_road_segment: SEG_S04_R2
   lane_direction: eastbound
@@ -355,8 +368,8 @@ cameras:
   start_timestamp_sec: 125.788
 - camera_id: c030
   name: Scene04-Camera15
-  latitude: 31.2988
-  longitude: 120.6146
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 180.0
   covered_road_segment: SEG_S04_R2
   lane_direction: southbound
@@ -367,8 +380,8 @@ cameras:
   start_timestamp_sec: 124.319
 - camera_id: c031
   name: Scene04-Camera16
-  latitude: 31.2993
-  longitude: 120.6126
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 270.0
   covered_road_segment: SEG_S04_R3
   lane_direction: westbound
@@ -379,8 +392,8 @@ cameras:
   start_timestamp_sec: 125.033
 - camera_id: c032
   name: Scene04-Camera17
-  latitude: 31.2993
-  longitude: 120.6131
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 0.0
   covered_road_segment: SEG_S04_R3
   lane_direction: northbound
@@ -391,8 +404,8 @@ cameras:
   start_timestamp_sec: 125.199
 - camera_id: c033
   name: Scene04-Camera18
-  latitude: 31.2993
-  longitude: 120.6136
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 90.0
   covered_road_segment: SEG_S04_R3
   lane_direction: eastbound
@@ -403,8 +416,8 @@ cameras:
   start_timestamp_sec: 150.893
 - camera_id: c034
   name: Scene04-Camera19
-  latitude: 31.2993
-  longitude: 120.6141
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 180.0
   covered_road_segment: SEG_S04_R3
   lane_direction: southbound
@@ -415,8 +428,8 @@ cameras:
   start_timestamp_sec: 140.218
 - camera_id: c035
   name: Scene04-Camera20
-  latitude: 31.2993
-  longitude: 120.6146
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 270.0
   covered_road_segment: SEG_S04_R3
   lane_direction: westbound
@@ -427,8 +440,8 @@ cameras:
   start_timestamp_sec: 165.568
 - camera_id: c036
   name: Scene04-Camera21
-  latitude: 31.2998
-  longitude: 120.6126
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 0.0
   covered_road_segment: SEG_S04_R4
   lane_direction: northbound
@@ -439,8 +452,8 @@ cameras:
   start_timestamp_sec: 170.797
 - camera_id: c037
   name: Scene04-Camera22
-  latitude: 31.2998
-  longitude: 120.6131
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 90.0
   covered_road_segment: SEG_S04_R4
   lane_direction: eastbound
@@ -451,8 +464,8 @@ cameras:
   start_timestamp_sec: 170.567
 - camera_id: c038
   name: Scene04-Camera23
-  latitude: 31.2998
-  longitude: 120.6136
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 180.0
   covered_road_segment: SEG_S04_R4
   lane_direction: southbound
@@ -463,8 +476,8 @@ cameras:
   start_timestamp_sec: 175.426
 - camera_id: c039
   name: Scene04-Camera24
-  latitude: 31.2998
-  longitude: 120.6141
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 270.0
   covered_road_segment: SEG_S04_R4
   lane_direction: westbound
@@ -475,8 +488,8 @@ cameras:
   start_timestamp_sec: 175.644
 - camera_id: c040
   name: Scene04-Camera25
-  latitude: 31.2998
-  longitude: 120.6146
+  latitude: 42.49878
+  longitude: -90.686393
   direction: 0.0
   covered_road_segment: SEG_S04_R4
   lane_direction: northbound
@@ -487,8 +500,8 @@ cameras:
   start_timestamp_sec: 175.838
 - camera_id: c041
   name: Scene06-Camera01
-  latitude: 31.2927
-  longitude: 120.5767
+  latitude: 42.492448
+  longitude: -90.723343
   direction: 0.0
   covered_road_segment: SEG_S06_001
   lane_direction: northbound
@@ -499,8 +512,8 @@ cameras:
   start_timestamp_sec: 0
 - camera_id: c042
   name: Scene06-Camera02
-  latitude: 31.2926
-  longitude: 120.577
+  latitude: 42.492448
+  longitude: -90.723343
   direction: 90.0
   covered_road_segment: SEG_S06_001
   lane_direction: eastbound
@@ -511,8 +524,8 @@ cameras:
   start_timestamp_sec: 0
 - camera_id: c043
   name: Scene06-Camera03
-  latitude: 31.2923
-  longitude: 120.577
+  latitude: 42.492448
+  longitude: -90.723343
   direction: 180.0
   covered_road_segment: SEG_S06_001
   lane_direction: southbound
@@ -523,8 +536,8 @@ cameras:
   start_timestamp_sec: 0
 - camera_id: c044
   name: Scene06-Camera04
-  latitude: 31.2921
-  longitude: 120.5767
+  latitude: 42.492448
+  longitude: -90.723343
   direction: 270.0
   covered_road_segment: SEG_S06_001
   lane_direction: westbound
@@ -535,8 +548,8 @@ cameras:
   start_timestamp_sec: 0
 - camera_id: c045
   name: Scene06-Camera05
-  latitude: 31.2923
-  longitude: 120.5763
+  latitude: 42.492448
+  longitude: -90.723343
   direction: 0.0
   covered_road_segment: SEG_S06_001
   lane_direction: northbound
@@ -547,8 +560,8 @@ cameras:
   start_timestamp_sec: 0
 - camera_id: c046
   name: Scene06-Camera06
-  latitude: 31.2926
-  longitude: 120.5763
+  latitude: 42.492448
+  longitude: -90.723343
   direction: 90.0
   covered_road_segment: SEG_S06_001
   lane_direction: eastbound

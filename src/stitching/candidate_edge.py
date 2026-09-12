@@ -42,6 +42,9 @@ logger = get_logger("stitching.candidate_edge")
 MIN_CITY_SPEED_KMH = 20.0
 MAX_CITY_SPEED_KMH = 80.0
 
+# 属性里的「未知」占位值 = 无信息，属性一致性检查时等同缺失，不与具体值判为冲突
+_MISSING_ATTR = frozenset({"", "none", "null", "未知", "unknown", "other", "其他", "n/a"})
+
 # 方向角度映射 (正北为0°, 顺时针)
 DIRECTION_TO_ANGLE: Dict[str, float] = {
     "eastbound": 90.0,
@@ -274,10 +277,7 @@ class CandidateEdgeGenerator:
         if not self._check_temporal_order(source, target):
             return False, "时间顺序不合理: 源不在目标之前"
 
-        # ---- 规则2补充: 时间间隔不超过阈值 ----
-        time_gap = time_diff_seconds(source.end_time, target.start_time)
-        if time_gap > self.max_time_gap_seconds:
-            return False, f"时间间隔过大: {time_gap:.1f}s > {self.max_time_gap_seconds:.1f}s"
+
 
         # ---- 规则1: 摄像头拓扑可达 ----
         if not self._check_topology_reachable(source.camera_id, target.camera_id, topology):
@@ -373,6 +373,9 @@ class CandidateEdgeGenerator:
     def _check_temporal_order(self, source: Tracklet, target: Tracklet) -> bool:
         """
         检查时间顺序: 源 Tracklet 的离开时间早于目标 Tracklet 的进入时间
+
+        用全局对齐时间判定（T5 偏移）。本数据集相邻摄像头有重叠视野，
+        本地时间下真值相邻对的旅行时间常为负（重叠），用本地时间会误杀真边。
 
         Args:
             source: 源 Tracklet
@@ -569,6 +572,14 @@ class CandidateEdgeGenerator:
             src_val = src_attrs.get(key)
             tgt_val = tgt_attrs.get(key)
 
+            # 「未知」等占位值 = 无信息，等同缺失，不应与任何具体值判为冲突。
+            # 修复前把 '未知' 当具体值：'未知' != '轿车' 会被误判为冲突、误删真实边
+            # （docstring 语义是「一方缺失则不冲突」，这里补上对未知值的识别）。
+            if src_val is not None and str(src_val).strip().lower() in _MISSING_ATTR:
+                src_val = None
+            if tgt_val is not None and str(tgt_val).strip().lower() in _MISSING_ATTR:
+                tgt_val = None
+
             # 双方都有该属性且值不同 → 冲突
             if src_val is not None and tgt_val is not None:
                 if str(src_val).lower() != str(tgt_val).lower():
@@ -647,10 +658,15 @@ class CandidateEdgeGenerator:
             tgt_cam = self.camera_manager.get_camera(tgt_camera_id)
             if src_cam is not None and tgt_cam is not None:
                 from src.common.utils import haversine_distance
-                return haversine_distance(
+                dist = haversine_distance(
                     src_cam.latitude, src_cam.longitude,
                     tgt_cam.latitude, tgt_cam.longitude,
                 )
+                # 数据集没有逐摄像头 GPS，只有场景近似中心：同一场景的摄像头坐标相同，
+                # haversine=0。0 应视为「未知距离」而非「真的 0 米」，返回 None 让调用方
+                # 走中性分，避免用 0 距离算出速度为 0 的伪结论。
+                if dist is not None and dist > 0:
+                    return dist
         except (NotImplementedError, AttributeError):
             pass
 

@@ -532,9 +532,13 @@ def get_stats(results_path: Optional[str] = None) -> Dict[str, Any]:
         return {"detections": 0, "tracks": 0, "cameras": 0, "source": "none"}
     detections = data.get("detections") or []
     camera_ids = {d.get("camera_id", "") for d in detections if d.get("camera_id")}
+    # 轨迹数按 det_to_track_map 的值域（= builder 生成 tracklet 的口径，实测 926）。
+    # 缺陷 E3：tracks[] 混装了 CF3_TRACK_*/BL_TRACK_*/CF2S_TRACK_* 三个来源，
+    # 其中 1700 条没有任何对应检测，len(tracks[]) 会虚报成 2070。
+    tracklet_count = len({t for t in (data.get("det_to_track_map") or {}).values() if t})
     return {
         "detections": len(detections),
-        "tracks": len(data.get("tracks") or []),
+        "tracks": tracklet_count,
         "cameras": len(camera_ids),
         "source": "json",
     }

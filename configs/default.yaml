@@ -79,6 +79,17 @@ data_format:
   cam_framenum_file: "cam_framenum/{scene}.txt"     # 每场景一个文件
   cam_loc_map: "cam_loc/{scene}.png"                # 场景级地图(无per-camera GPS)
 
+# 跨摄时间对齐（T5）
+# cityflow_results.json 里的 timestamp 是各摄像头自己的本地时间（每路都从
+# 2020-01-01 00:00:00 附近起跳），跨摄像头直接相减会得到无意义的负值。
+# cam_timestamp/{scene}.txt 给出每个摄像头的全局起始偏移（秒）:
+#     全局时间 = 本地时间 + 该摄像头偏移
+# 只作用于"跨摄像头时间差"(actual_travel_time / 跨镜总时长 / 摄像头先后排序)，
+# 每个检测自身的 timestamp 字段仍保持本机时间；全局时间作为新增字段输出。
+# 文件路径 = system.data_dir + data_format.cam_timestamp_file（按场景填充）。
+time_alignment:
+  enabled: true                       # 置 false 则完全退回本机时间（不做换算）
+
 # 目标检测配置
 detection:
   model: "yolov8x"                  # ultralytics YOLO 模型名
@@ -137,15 +148,15 @@ quality:
 # 跨镜拼接
 stitching:
   max_time_gap_seconds: 600         # 最大时间间隔(秒)
-  min_appearance_score: 0.6         # 最低外观相似度
+  min_appearance_score: 0.95        # 最低外观相似度（P-B 实测 0.6 太低会放行异车；0.95 精度≈0.97）
   spatial_search_radius_km: 10.0    # 空间搜索半径(公里)
   weights:
     vehicle:
       plate: 0.35                   # 车牌一致性
-      temporal: 0.25                # 时间可达性
+      temporal: 0.40                # 时间可达性（P-A 实测最可靠，调高）
       topology: 0.15                # 摄像头拓扑
-      reid: 0.15                    # ReID 外观
-      attribute: 0.10               # 属性一致性
+      reid: 0.0                     # ReID 外观（P-A 实测软评分权重是噪声→置零；外观仍由规则8硬门控过滤）
+      attribute: 0.0                # 属性一致性（P-A 实测跨镜一致率仅28-37%，软评分是噪声→置零；仍由规则7硬门控）
     pedestrian:
       temporal: 0.35                # 时空可达性
       reid: 0.30                    # ReID 外观
@@ -154,6 +165,11 @@ stitching:
   penalties:
     path_divergence: 0.1            # 路径分叉惩罚
     observation_missing: 0.05       # 观测缺失惩罚
+  # 某个分项"没有证据"时（如双方都没有 ReID 向量 / 都没有车牌），该维度恒为
+  # 中性分 0.5，按原权重算进总分只会给所有候选加上同一个常数偏移、白白压缩
+  # 区分度。true = 剔除该维度并把权重按比例分摊给有证据的维度（权重总和不变，
+  # 不放大任何单个分项）；false = 退回旧行为（中性分 × 原权重直接求和）。
+  reweight_missing_dimensions: true
 
 # 文本检索
 retrieval:
@@ -175,7 +191,10 @@ backtrack:
 
 # API 配置
 api:
-  host: "0.0.0.0"
+  # 监听地址。默认 127.0.0.1（仅本机可访问）—— 本服务无鉴权，
+  # 改成 0.0.0.0 会让同局域网内任何人都能访问，需自行评估暴露风险。
+  # 容器部署不受影响：Dockerfile.backend 显式传 --host 0.0.0.0。
+  host: "127.0.0.1"
   port: 8000
   workers: 2
   cors_origins: ["*"]

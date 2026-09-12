@@ -246,14 +246,16 @@ def _extract_query_features(query_text: str) -> Dict[str, Any]:
         if extracted['color']:
             break
     
-    # 提取车型
+    # 提取车型：取**最长命中关键词**，而不是首个命中。
+    # 原实现是「按 TYPE_MAP 顺序取首个命中」，导致 "皮卡" 被 "卡车" 的关键词 '卡'
+    # 抢先匹配成 "卡车" —— '皮卡' 那一项永远不可达，皮卡查询（3558 条检测）恒被
+    # 过滤成卡车从而必然漏检。设计路径 src/retrieval/query_parser.py 无此问题。
+    best_kw_len = 0
     for type_cn, keywords in TYPE_MAP.items():
         for kw in keywords:
-            if kw in query_lower:
+            if kw in query_lower and len(kw) > best_kw_len:
+                best_kw_len = len(kw)
                 extracted['vehicle_type'] = type_cn
-                break
-        if extracted['vehicle_type']:
-            break
     
     # 剩余关键词
     words = query_text.split()

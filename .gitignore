@@ -79,3 +79,6 @@ Thumbs.db
 *.tmp
 frontend_start_err.txt
 frontend_start_out.txt
+
+# 临时实验脚本目录（本会话 probe 用）
+.tmp-webapp/

@@ -36,7 +36,7 @@ def main() -> None:
     from src.common.config import get_config
     config = get_config(args.config)
 
-    host = args.host or config.get("api.host", "0.0.0.0")
+    host = args.host or config.get("api.host", "127.0.0.1")
     port = args.port or config.get("api.port", 8000)
     workers = args.workers or config.get("api.workers", 2)
 

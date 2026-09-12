@@ -10,16 +10,32 @@ src.stitching.scoring - 跨镜连接评分模块
 车辆侧权重: 车牌(0.35) > 时间(0.25) > 拓扑(0.15) > ReID(0.15) > 属性(0.10)
 行人侧权重: 时间(0.35) > ReID(0.30) > 属性(0.25) > 背包(0.10)
 
+**权重唯一来源是 `configs/default.yaml` 的 `stitching.weights`**（T6）：
+不传 `vehicle_weights` / `pedestrian_weights` 时本模块自动从配置读取；只在
+配置不可用时才退回本文件里的 `DEFAULT_*_WEIGHTS` 兜底值（兜底值已与配置
+对齐，两者不再各说各话）。
+
+权重缺失维度的处理（T6）
+------------------------
+某个分项"没有证据"时（如 ReID 与 CLIP 向量都没有 → 外观分恒为中性 0.5，
+或双方都没有车牌 → 车牌分恒为中性 0.5），把它按原权重乘进加权和只会给
+**所有候选**加上同一个常数偏移，白白压缩区分度。因此默认启用
+`reweight_missing_dimensions`（可由 `stitching.reweight_missing_dimensions`
+关闭）：把无证据维度的权重**按比例分摊**到有证据的维度上，权重总和与原来
+一致（不会放大任何分项），被剔除的维度在 `reasoning` 与原子的
+`explain_dimensions()` 里显式列出，可测试、可观测。
+
 每个评分分项都有独立的计算方法，方便后续消融实验。
 """
 
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from src.common.config import get_config
 from src.common.data_models import CrossCameraEdge, Tracklet
 from src.common.logger import get_logger
 from src.common.utils import cosine_similarity, time_diff_seconds
@@ -35,6 +51,67 @@ logger = get_logger("stitching.scoring")
 # 城区合理速度范围 (km/h)
 MIN_CITY_SPEED_KMH = 20.0
 MAX_CITY_SPEED_KMH = 80.0
+
+# 分项"无证据"时的中性分（不奖励也不惩罚）
+NEUTRAL_SCORE = 0.5
+
+# 方向一致性是额外加分项，不计入 stitching.weights 的主权重归一化
+DIRECTION_BONUS_WEIGHT = 0.10
+
+# 配置缺失时的兜底权重——**必须与 configs/default.yaml 的 stitching.weights 一致**，
+# 否则又会出现"配置一套、代码一套"的两套权重问题（T6 修的正是这个）
+DEFAULT_VEHICLE_WEIGHTS: Dict[str, float] = {
+    "plate": 0.35,
+    "temporal": 0.40,
+    "topology": 0.15,
+    # reid / attribute 软评分权重置零：P-A 网格搜索实测（eval_chain_idf1.py）
+    # 它们的连续相似度值跨镜不可分（d-prime 0.78 / 属性一致率 28-37%），
+    # 加权进软评分只会加噪声。真正的过滤由规则 8（外观硬门控）与规则 7（属性硬门控）承担。
+    "reid": 0.0,
+    "attribute": 0.0,
+}
+DEFAULT_PEDESTRIAN_WEIGHTS: Dict[str, float] = {
+    "temporal": 0.35,
+    "reid": 0.30,
+    "attribute": 0.25,
+    "bag": 0.10,
+}
+DEFAULT_PENALTIES: Dict[str, float] = {
+    "path_divergence": 0.10,
+    "observation_missing": 0.05,
+}
+
+
+def load_stitching_weights(
+    config: Any = None,
+) -> Tuple[Optional[Dict[str, float]], Optional[Dict[str, float]], Optional[Dict[str, float]]]:
+    """
+    从 `configs/default.yaml` 的 `stitching` 段读取权重与惩罚项
+
+    Args:
+        config: Config 实例；缺省用全局单例 `get_config()`
+
+    Returns:
+        (vehicle_weights, pedestrian_weights, penalties)；配置读取失败或缺少
+        对应段落时该项为 None（由调用方退回 DEFAULT_* 兜底值）
+    """
+    try:
+        cfg = config if config is not None else get_config()
+        weights_cfg = cfg.get("stitching.weights", {}) or {}
+        penalties_cfg = cfg.get("stitching.penalties", {}) or {}
+    except Exception as e:  # 配置文件缺失/损坏不应让评分器初始化失败
+        logger.warning("读取 stitching 权重配置失败，使用内置兜底权重: %s", e)
+        return None, None, None
+
+    vehicle = weights_cfg.get("vehicle") or None
+    pedestrian = weights_cfg.get("pedestrian") or None
+    penalties = penalties_cfg or None
+    if vehicle is None or pedestrian is None:
+        logger.warning(
+            "configs/default.yaml 的 stitching.weights 缺少 vehicle/pedestrian，"
+            "缺失项将使用内置兜底权重"
+        )
+    return vehicle, pedestrian, penalties
 
 # 方向映射: 方向字符串 → 角度 (正北为0°, 顺时针)
 DIRECTION_TO_ANGLE: Dict[str, float] = {
@@ -93,52 +170,68 @@ class CrossCameraScorer:
         penalties: Optional[Dict[str, float]] = None,
         min_speed_kmh: float = MIN_CITY_SPEED_KMH,
         max_speed_kmh: float = MAX_CITY_SPEED_KMH,
+        camera_time_offsets: Optional[Dict[str, float]] = None,
+        config: Any = None,
     ) -> None:
         """
         初始化评分器
 
+        权重优先级（T6）:
+            显式传参 > `configs/default.yaml` 的 `stitching.weights` > 内置兜底值
+        三者数值口径一致，不再出现"配置一套、代码一套"。
+
         Args:
             camera_manager: 摄像头管理器
             road_topology: 道路拓扑
-            vehicle_weights: 车辆评分权重字典
-            pedestrian_weights: 行人评分权重字典
-            penalties: 惩罚项权重字典
+            vehicle_weights: 车辆评分权重字典（None 则读配置）
+            pedestrian_weights: 行人评分权重字典（None 则读配置）
+            penalties: 惩罚项权重字典（None 则读配置）
             min_speed_kmh: 城区最低速度 (km/h)
             max_speed_kmh: 城区最高速度 (km/h)
+            camera_time_offsets: 摄像头 → 全局时间偏移(秒)；传入后时间/空间可达性
+                会先把本机时间换算成全局时间再算跨镜间隔（T5 对齐）。None 表示
+                不做换算，等价于旧行为（本机时间直接相减）
+            config: Config 实例；缺省用全局单例（仅在需要读权重时使用）
         """
         self.camera_manager = camera_manager
         self.road_topology = road_topology
         self.min_speed_kmh = min_speed_kmh
         self.max_speed_kmh = max_speed_kmh
 
-        # 车辆权重: 车牌 > 时间 > ReID > 拓扑 > 属性
-        # 优化: 增加reid和temporal权重，降低topology权重，提升密集场景区分度
-        self.vehicle_weights = vehicle_weights or {
-            "plate": 0.30,
-            "temporal": 0.25,
-            "topology": 0.10,   # 对应空间可达性 (降低权重减少误关联)
-            "reid": 0.25,
-            "attribute": 0.10,
-        }
+        # 摄像头全局时间偏移（T5）：空字典/None → 不做换算
+        self.camera_time_offsets: Dict[str, float] = dict(camera_time_offsets or {})
 
-        # 行人权重: 时间 > ReID > 属性 > 背包
-        # 优化: 增加reid权重，提升外观区分度
-        self.pedestrian_weights = pedestrian_weights or {
-            "temporal": 0.30,
-            "reid": 0.35,
-            "attribute": 0.25,
-            "bag": 0.10,
-        }
+        # 权重：显式传参 > 配置 > 兜底（兜底值与配置对齐）
+        cfg_vehicle, cfg_pedestrian, cfg_penalties = load_stitching_weights(config)
+        self.vehicle_weights = vehicle_weights or cfg_vehicle or dict(DEFAULT_VEHICLE_WEIGHTS)
+        self.pedestrian_weights = (
+            pedestrian_weights or cfg_pedestrian or dict(DEFAULT_PEDESTRIAN_WEIGHTS)
+        )
+        self.penalties = penalties or cfg_penalties or dict(DEFAULT_PENALTIES)
 
-        # 惩罚项配置
-        self.penalties = penalties or {
-            "path_divergence": 0.1,      # 路径分叉惩罚系数
-            "observation_missing": 0.05,  # 观测缺失惩罚系数
-        }
+        # "生效权重是否等于配置里的值"——显式传入但值与配置相同的也算（构建器
+        # 就是把配置值透传进来的），避免这个标志位对线上路径失真
+        self.weights_from_config = bool(
+            cfg_vehicle is not None
+            and (vehicle_weights is None or dict(vehicle_weights) == dict(cfg_vehicle))
+        )
+
+        # 无证据维度是否剔除并重新分摊权重（T6）
+        self.reweight_missing_dimensions = True
+        try:
+            cfg = config if config is not None else get_config()
+            self.reweight_missing_dimensions = bool(
+                cfg.get("stitching.reweight_missing_dimensions", True)
+            )
+        except Exception as e:
+            logger.warning("读取 reweight_missing_dimensions 失败，保持默认 True: %s", e)
 
         logger.info(
-            "跨镜连接评分器初始化 | 车辆权重=%s | 行人权重=%s | 惩罚=%s",
-            self.vehicle_weights, self.pedestrian_weights, self.penalties,
+            "跨镜连接评分器初始化 | 车辆权重=%s(来源=%s) | 行人权重=%s | 惩罚=%s | "
+            "缺失维度重分摊=%s | 时间偏移=%d 个摄像头",
+            self.vehicle_weights, "配置" if self.weights_from_config else "传参/兜底",
+            self.pedestrian_weights, self.penalties,
+            self.reweight_missing_dimensions, len(self.camera_time_offsets),
         )
 
     # ================================================================
@@ -156,10 +249,11 @@ class CrossCameraScorer:
         流程:
             1. 根据目标类别选择权重配置
             2. 计算各维度分项分数
-            3. 加权求和得到基础分
-            4. 计算并减去惩罚项
-            5. 截断到 [0, 1] 范围
-            6. 生成可解释推理说明
+            3. 剔除"无证据"维度并把其权重按比例分摊给有证据的维度（T6）
+            4. 加权求和得到基础分
+            5. 计算并减去惩罚项
+            6. 截断到 [0, 1] 范围
+            7. 生成可解释推理说明（含有效权重与剔除明细）
 
         Args:
             source: 源 Tracklet (时间较早)
@@ -178,6 +272,10 @@ class CrossCameraScorer:
         else:
             # 非机动车等默认使用行人权重
             weights = self.pedestrian_weights
+
+        # ---------- 维度可用性 + 有效权重（T6）----------
+        availability = self._dimension_availability(source, target)
+        effective_weights, dropped = self._effective_weights(weights, availability)
 
         # ---------- 计算各维度分数 ----------
         appearance_score = self._score_appearance(source, target)
@@ -199,7 +297,7 @@ class CrossCameraScorer:
         # ---------- 加权求和 ----------
         # 根据权重配置映射到各分项
         weighted_score = self._weighted_sum(
-            weights=weights,
+            weights=effective_weights,
             appearance_score=appearance_score,
             attribute_score=attribute_score,
             plate_score=plate_score,
@@ -227,14 +325,19 @@ class CrossCameraScorer:
             total_penalty=total_penalty,
             final_score=final_score,
             weights=weights,
+            effective_weights=effective_weights,
+            dropped_dimensions=dropped,
+            availability=availability,
         )
 
         logger.debug(
             "评分完成 | %s → %s | score=%.4f | appearance=%.3f attr=%.3f "
-            "plate=%.3f temporal=%.3f spatial=%.3f direction=%.3f penalty=%.3f",
+            "plate=%.3f temporal=%.3f spatial=%.3f direction=%.3f penalty=%.3f "
+            "| 有效权重=%s | 剔除=%s",
             source.tracklet_id, target.tracklet_id, final_score,
             appearance_score, attribute_score, plate_score,
             temporal_score, spatial_score, direction_score, total_penalty,
+            effective_weights, dropped,
         )
 
         return CrossCameraEdge(
@@ -256,8 +359,147 @@ class CrossCameraScorer:
     score_edge = score
 
     # ================================================================
+    # 维度可用性与权重分摊 (T6: 让"无证据维度"的退化路径显式、可测、可观测)
+    # ================================================================
+
+    def _dimension_availability(
+        self, source: Tracklet, target: Tracklet
+    ) -> Dict[str, bool]:
+        """
+        判断每个评分维度这一对 Tracklet 是否**有真实证据**
+
+        没有证据的维度分项恒为 NEUTRAL_SCORE(0.5)，把它算进加权和只会给所有
+        候选加上同一个常数偏移。判定口径:
+
+            - reid:      双方都有 ReID 或都有 CLIP 向量（与 `_score_appearance` 一致）
+            - plate:     双方都有车牌（否则 `_score_plate` 恒为 0.5）
+            - attribute: 至少一个属性键双方都有值（否则 `_score_attribute` 恒为 0.5）
+            - temporal:  恒为 True（一定算得出时间差）
+            - topology:  恒为 True（拓扑距离/可达性一定给出分数）
+
+        Returns:
+            {"reid": bool, "plate": bool, "attribute": bool, "temporal": bool,
+             "topology": bool}
+        """
+        target_type = source.target_type.lower()
+        attr_keys = (
+            VEHICLE_ATTRIBUTE_KEYS if target_type == "vehicle" else PEDESTRIAN_ATTRIBUTE_KEYS
+        )
+        src_attrs = source.attributes or {}
+        tgt_attrs = target.attributes or {}
+        attribute_available = any(
+            src_attrs.get(key) is not None and tgt_attrs.get(key) is not None
+            for key in attr_keys
+        )
+
+        return {
+            "reid": self._appearance_source(source, target) != "none",
+            "plate": bool(source.has_plate and target.has_plate),
+            "attribute": attribute_available,
+            "temporal": True,
+            "topology": True,
+        }
+
+    def _effective_weights(
+        self,
+        weights: Dict[str, float],
+        availability: Dict[str, bool],
+    ) -> Tuple[Dict[str, float], List[str]]:
+        """
+        剔除无证据维度的权重，并按比例分摊到有证据的维度
+
+        分摊方式：保持**权重总和不变**，只按原有比例重新分配。例如车辆的
+        plate(0.35)+reid(0.15) 都无证据时，剩下的 temporal(0.25)、
+        topology(0.15)、attribute(0.10) 会被放大 2 倍变为 0.5 / 0.3 / 0.2，
+        总和仍是 1.0——因此**不会**放大任何单个分项的绝对贡献，只是让有限的
+        区分度全部来自真正有信息的维度。
+
+        关闭 `self.reweight_missing_dimensions`（配置
+        `stitching.reweight_missing_dimensions=false`）时原样返回，退化为旧行为：
+        无证据维度以中性 0.5 乘原权重参与求和。
+
+        Args:
+            weights: 原始权重（来自配置或构造参数）
+            availability: `_dimension_availability` 的结果
+
+        Returns:
+            (有效权重, 被剔除的权重键列表)
+        """
+        if not self.reweight_missing_dimensions:
+            return dict(weights), []
+
+        kept: Dict[str, float] = {}
+        dropped: List[str] = []
+        for key, value in weights.items():
+            try:
+                weight = float(value)
+            except (TypeError, ValueError):
+                continue
+            if weight <= 0:
+                continue
+            # 行人背包权重落在属性分上，可用性跟随 attribute
+            availability_key = "attribute" if key == "bag" else key
+            if not availability.get(availability_key, True):
+                dropped.append(key)
+                continue
+            kept[key] = weight
+
+        total_kept = sum(kept.values())
+        total_original = sum(
+            float(v) for v in weights.values()
+            if isinstance(v, (int, float)) and float(v) > 0
+        )
+        if total_kept <= 0 or total_original <= 0:
+            # 所有维度都无证据 → 保持原权重（各项均为中性分，总分也就中性）
+            return dict(weights), dropped
+
+        scale = total_original / total_kept
+        return {key: weight * scale for key, weight in kept.items()}, dropped
+
+    def explain_dimensions(self, source: Tracklet, target: Tracklet) -> Dict[str, Any]:
+        """
+        输出一对 Tracklet 的评分维度可解释信息（供测试与线上排障）
+
+        Returns:
+            {"weights", "effective_weights", "dropped_dimensions",
+             "availability", "appearance_source", "reweighting_enabled",
+             "time_aligned"}
+        """
+        target_type = source.target_type.lower()
+        weights = self.vehicle_weights if target_type == "vehicle" else self.pedestrian_weights
+        availability = self._dimension_availability(source, target)
+        effective_weights, dropped = self._effective_weights(weights, availability)
+        return {
+            "target_type": target_type,
+            "weights": dict(weights),
+            "effective_weights": effective_weights,
+            "dropped_dimensions": dropped,
+            "availability": availability,
+            "appearance_source": self._appearance_source(source, target),
+            "reweighting_enabled": self.reweight_missing_dimensions,
+            "time_aligned": bool(
+                self.camera_time_offsets.get(source.camera_id) is not None
+                and self.camera_time_offsets.get(target.camera_id) is not None
+            ) if self.camera_time_offsets else False,
+        }
+
+    # ================================================================
     # 分项评分方法 (每个方法独立可调用, 方便消融实验)
     # ================================================================
+
+    def _appearance_source(self, source: Tracklet, target: Tracklet) -> str:
+        """
+        外观分的证据来源（显式化退化路径）
+
+        Returns:
+            "reid"（双方都有 ReID 向量）/ "clip"（回退到 CLIP 向量）/
+            "none"（都没有 → 外观分只能给中性值，此时该维度不参与加权）
+        """
+        if source.avg_reid_vector is not None and target.avg_reid_vector is not None:
+            return "reid"
+        if source.avg_clip_vector is not None and target.avg_clip_vector is not None:
+            return "clip"
+        return "none"
 
     def _score_appearance(self, source: Tracklet, target: Tracklet) -> float:
         """
@@ -274,20 +516,22 @@ class CrossCameraScorer:
             target: 目标 Tracklet
 
         Returns:
-            外观相似度 [0, 1]，无特征时返回 0.5 (中性)
+            外观相似度 [0, 1]；无任何外观特征时返回 NEUTRAL_SCORE (0.5)。
+
+        注意: 返回 0.5 只表示"这一维没有信息"，**不代表**两目标外观相似——是否
+        把这一维算进总分由 `_dimension_availability` / `_effective_weights`
+        决定（默认会把无证据维度的权重剔除并分摊给其它维度）。
         """
-        # 优先使用 ReID 向量
-        if source.avg_reid_vector is not None and target.avg_reid_vector is not None:
+        source_kind = self._appearance_source(source, target)
+
+        if source_kind == "none":
+            return NEUTRAL_SCORE
+
+        if source_kind == "reid":
             cos_sim = cosine_similarity(source.avg_reid_vector, target.avg_reid_vector)
-            return float((cos_sim + 1.0) / 2.0)
-
-        # 回退到 CLIP 向量
-        if source.avg_clip_vector is not None and target.avg_clip_vector is not None:
+        else:
             cos_sim = cosine_similarity(source.avg_clip_vector, target.avg_clip_vector)
-            return float((cos_sim + 1.0) / 2.0)
-
-        # 无任何外观特征 → 返回中性值
-        return 0.5
+        return float((cos_sim + 1.0) / 2.0)
 
     def _score_attribute(self, source: Tracklet, target: Tracklet) -> float:
         """
@@ -332,7 +576,7 @@ class CrossCameraScorer:
 
             if src_val is None or tgt_val is None:
                 # 一方或双方缺失 → 中性分
-                weighted_sum += 0.5 * w
+                weighted_sum += NEUTRAL_SCORE * w
             elif str(src_val).lower() == str(tgt_val).lower():
                 # 匹配
                 weighted_sum += 1.0 * w
@@ -341,7 +585,7 @@ class CrossCameraScorer:
                 weighted_sum += 0.0 * w
 
         if total_weight == 0:
-            return 0.5
+            return NEUTRAL_SCORE
 
         return weighted_sum / total_weight
 
@@ -374,8 +618,24 @@ class CrossCameraScorer:
             else:
                 return 0.0  # 车牌冲突 → 直接否决
 
-        # 其他情况 (一方无车牌或双方都无)
-        return 0.5
+        # 其他情况 (一方无车牌或双方都无) → 无证据的中性分
+        return NEUTRAL_SCORE
+
+    def _aligned_travel_time(self, source: Tracklet, target: Tracklet) -> float:
+        """
+        跨镜旅行时间（秒）: target 首现 − source 末现
+
+        传入 `camera_time_offsets` 时先把双方的本机时间换算成全局时间再相减
+        （T5：各摄像头的 timestamp 都从 0 起跳，直接相减会得到错位的负值）。
+        未传偏移表时就是本机时间相减，与旧行为完全一致。
+        """
+        gap = time_diff_seconds(source.end_time, target.start_time)
+        if not self.camera_time_offsets:
+            return gap
+        return gap + (
+            self.camera_time_offsets.get(target.camera_id, 0.0)
+            - self.camera_time_offsets.get(source.camera_id, 0.0)
+        )
 
     def _score_temporal(self, source: Tracklet, target: Tracklet) -> float:
         """
@@ -383,6 +643,7 @@ class CrossCameraScorer:
 
         流程:
             1. 计算实际旅行时间 = target.start_time - source.end_time
+               （传入摄像头偏移表时按全局时间计算，见 `_aligned_travel_time`）
             2. 获取摄像头间距离, 计算合理旅行时间范围:
                - 最短时间 = distance / max_speed
                - 最长时间 = distance / min_speed
@@ -397,7 +658,7 @@ class CrossCameraScorer:
             时间可达性分数 [0, 1]
         """
         # 实际旅行时间 (秒)
-        actual_travel_time = time_diff_seconds(source.end_time, target.start_time)
+        actual_travel_time = self._aligned_travel_time(source, target)
         if actual_travel_time < 0:
             # 时间倒序 → 不可能
             return 0.0
@@ -474,8 +735,8 @@ class CrossCameraScorer:
             # 无距离信息 → 中等分数 (不惩罚)
             return 0.5
 
-        # 实际旅行时间
-        actual_travel_time = time_diff_seconds(source.end_time, target.start_time)
+        # 实际旅行时间（传入偏移表时按全局时间计算，见 `_aligned_travel_time`）
+        actual_travel_time = self._aligned_travel_time(source, target)
         if actual_travel_time <= 0:
             return 0.0
 
@@ -522,7 +783,7 @@ class CrossCameraScorer:
 
         if not src_direction or not tgt_direction:
             # 方向信息缺失 → 中性
-            return 0.5
+            return NEUTRAL_SCORE
 
         # 获取源 tracklet 运动方向角度
         src_angle = DIRECTION_TO_ANGLE.get(src_direction)
@@ -531,7 +792,7 @@ class CrossCameraScorer:
 
         if src_angle is None or tgt_angle is None:
             # 无法解析方向 → 中性
-            return 0.5
+            return NEUTRAL_SCORE
 
         # 计算角度差 [0, 180]
         angle_diff = abs(src_angle - tgt_angle) % 360
@@ -645,10 +906,13 @@ class CrossCameraScorer:
             - "bag" → attribute_score (行人背包归入属性)
             - "direction" → direction_score (始终参与, 作为额外加分)
 
-        方向一致性作为额外加分项 (权重 0.05), 不计入主权重归一化。
+        方向一致性作为额外加分项（DIRECTION_BONUS_WEIGHT，与 config 无关），
+        不计入主权重归一化。本方法**不做归一化**：调用方传入的应当是已经处理过
+        缺失维度、总和与配置一致的 `effective_weights`（见 `_effective_weights`）；
+        直接传原始权重则保持旧的"中性分 × 原权重"行为。
 
         Args:
-            weights: 权重字典
+            weights: 权重字典（通常来自 `_effective_weights`）
             各分项分数
 
         Returns:
@@ -682,8 +946,7 @@ class CrossCameraScorer:
             score += w_bag * attribute_score
 
         # 方向一致性作为额外加分项 (权重提升以增强同方向车辆匹配)
-        direction_weight = 0.10
-        score += direction_weight * direction_score
+        score += DIRECTION_BONUS_WEIGHT * direction_score
 
         return score
 
@@ -722,7 +985,11 @@ class CrossCameraScorer:
             src_cam = self.camera_manager.get_camera(src_camera_id)
             tgt_cam = self.camera_manager.get_camera(tgt_camera_id)
             if src_cam is not None and tgt_cam is not None:
-                return src_cam.distance_to(tgt_cam)
+                dist = src_cam.distance_to(tgt_cam)
+                # 同 P1：数据集只有场景近似中心，同一场景摄像头坐标相同 → haversine=0，
+                # 0 应视为「未知距离」而非「真的 0 米」，返回 None 走中性分。
+                if dist is not None and dist > 0:
+                    return dist
         except (NotImplementedError, AttributeError):
             pass
 
@@ -801,12 +1068,18 @@ class CrossCameraScorer:
         total_penalty: float,
         final_score: float,
         weights: Dict[str, float],
+        effective_weights: Optional[Dict[str, float]] = None,
+        dropped_dimensions: Optional[List[str]] = None,
+        availability: Optional[Dict[str, bool]] = None,
     ) -> str:
         """
         生成可解释推理说明字符串
 
         Args:
             各分项分数和配置
+            effective_weights: 剔除无证据维度后的实际权重（T6 可观测性）
+            dropped_dimensions: 被剔除的权重键
+            availability: 各维度是否有真实证据
 
         Returns:
             推理说明字符串
@@ -823,14 +1096,37 @@ class CrossCameraScorer:
             f"  最终得分={final_score:.3f}",
         ]
 
+        # 权重来源与缺失维度的处理（显式化，便于排障与消融）
+        if effective_weights is not None:
+            parts.append(f"  配置权重={weights}")
+            parts.append(
+                "  有效权重="
+                + " ".join(f"{k}={v:.3f}" for k, v in sorted(effective_weights.items()))
+                + (
+                    f"（无证据维度已剔除并按比例分摊: {', '.join(sorted(dropped_dimensions))}）"
+                    if dropped_dimensions else "（全部维度均有证据）"
+                )
+            )
+        if availability is not None:
+            parts.append(
+                "  维度证据="
+                + " ".join(
+                    f"{k}={'有' if v else '无'}" for k, v in sorted(availability.items())
+                )
+            )
+
         # 关键证据摘要
         evidence = []
         if plate_score == 1.0:
             evidence.append("车牌完全匹配")
         elif plate_score == 0.0:
             evidence.append("车牌冲突(否决)")
+        elif availability is not None and not availability.get("plate", True):
+            evidence.append("双方均无车牌(车牌维度无证据, 不计入总分)")
 
-        if appearance_score >= 0.8:
+        if availability is not None and not availability.get("reid", True):
+            evidence.append("无 ReID/CLIP 外观特征(外观维度无证据, 不计入总分)")
+        elif appearance_score >= 0.8:
             evidence.append("外观高度相似")
         elif appearance_score < 0.4:
             evidence.append("外观差异较大")

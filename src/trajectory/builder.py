@@ -19,6 +19,23 @@ src.trajectory.builder - 跨镜轨迹构建器
 不使用任何随机数：所有 ID 由 (instance_id, target_id) 确定性派生，
 同一锚点重复调用结果完全一致。
 
+T5 跨摄时间对齐
+---------------
+`output/cityflow_results.json` 里每辆车的 `timestamp` 是**各摄像头自己的本地
+时间**：每路都从 2020-01-01 00:00:00 附近起跳，因此不同摄像头的时间戳直接
+相减是错位的（V0034 在 c004 的 [0, 4.6s] 与 c005 的 [1.3, 6.6s] 看似"重叠"，
+其实是两台相机各自从 0 起跳）。
+
+数据集在 `cam_timestamp/{scene}.txt` 中给出了每个摄像头的**全局起始偏移**
+（秒，如 S04 的 c016=0、c017=14.318、c018=29.955）。本模块据此建立
+`摄像头 → 偏移秒` 映射：
+
+    全局时间 = 本地时间 + 该摄像头偏移
+
+只用于**跨摄像头的时间差**（`actual_travel_time`、跨镜总时长、摄像头先后
+排序），每个检测自身展示用的 `timestamp` 字段保持本机时间不变——若需要
+全局时间，一律作为新增字段（`global_timestamp` 等）给出，不覆盖原字段。
+
 使用方式:
     from src.trajectory.builder import get_trajectory_builder
 
@@ -30,10 +47,11 @@ src.trajectory.builder - 跨镜轨迹构建器
 
 from __future__ import annotations
 
+import json
 import math
 import uuid
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -57,6 +75,9 @@ from src.stitching.observation_chain import ObservationChainBuilder
 from src.stitching.scoring import CrossCameraScorer
 
 logger = get_logger("trajectory.builder")
+
+# 项目根目录（与 src/storage/datastore.py 同一约定）
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 # ============================================================
@@ -275,6 +296,22 @@ class TrajectoryBuilder:
         self._default_upstream = int(self._config.get("backtrack.max_upstream_depth", 10))
         self._default_downstream = int(self._config.get("backtrack.max_downstream_depth", 10))
 
+        # ---- 跨摄时间对齐（T5，路径全部来自 configs/default.yaml）----
+        # cam_timestamp 文件给出每个摄像头的全局起始偏移；缺失时保持本机时间，
+        # 绝不用估算值替代（对齐前本机时间相减会得到无意义的负跨镜间隔）。
+        align_cfg = self._config.get("time_alignment", {}) or {}
+        self._time_alignment_enabled = bool(align_cfg.get("enabled", True))
+        self._dataset_dir = str(
+            self._config.get("system.data_dir", "cityflow/AICity22_Track1_MTMC_Tracking")
+        )
+        self._cam_timestamp_template = str(
+            self._config.get("data_format.cam_timestamp_file", "cam_timestamp/{scene}.txt")
+        )
+        self._camera_offsets_by_scene: Dict[Tuple[str, str], float] = {}
+        # 跨场景兜底表: camera_id -> (来源场景, 偏移秒)，来源场景仅用于冲突告警
+        self._camera_offsets_by_camera: Dict[str, Tuple[str, float]] = {}
+        self._offsets_loaded = False
+
         # ---- 数据索引（惰性加载）----
         self._loaded = False
         self._load_failed = False
@@ -290,6 +327,7 @@ class TrajectoryBuilder:
         self._camera_manager = None
         self._road_topology = None
         self._scorer: Optional[BoundedCrossCameraScorer] = None
+        self._track_reid_map: Optional[Dict[str, np.ndarray]] = None
 
         # ---- 缓存（同一锚点重复调用直接命中，保证结果稳定且低延迟）----
         self._tracklet_index: Dict[str, Tracklet] = {}
@@ -383,6 +421,7 @@ class TrajectoryBuilder:
             self._tracklet_detections[track_id].sort(key=lambda d: d.get("timestamp", ""))
 
         self._load_camera_metadata()
+        self._load_camera_time_offsets()
         self._loaded = True
         logger.info(
             "CityFlow 数据加载完成 | 检测=%d | 目标=%d | 车辆=%d | 单摄轨迹=%d | 摄像头=%d",
@@ -402,6 +441,9 @@ class TrajectoryBuilder:
             logger.warning("加载摄像头元数据失败: %s", e)
             return
 
+        # 场景近似中心（数据集唯一真实的 GPS，见 ReadMe §12；逐摄像头 GPS 不存在）
+        scene_gps = data.get("scene_gps_center", {}) or {}
+
         for cam in data.get("cameras", []) or []:
             camera_id = cam.get("camera_id", "")
             if not camera_id:
@@ -413,6 +455,7 @@ class TrajectoryBuilder:
                 "scene": scene,
                 "latitude": cam.get("latitude"),
                 "longitude": cam.get("longitude"),
+                "scene_gps_center": scene_gps.get(scene),
             })
             entry["name"] = cam.get("name", entry.get("name", camera_id))
             if scene:
@@ -421,9 +464,171 @@ class TrajectoryBuilder:
                 entry["latitude"] = cam.get("latitude")
             if entry.get("longitude") is None:
                 entry["longitude"] = cam.get("longitude")
+            if entry.get("scene_gps_center") is None:
+                entry["scene_gps_center"] = scene_gps.get(scene)
             self._camera_direction_map[camera_id] = _LANE_DIR_CN.get(cam.get("lane_direction", ""), "")
 
         logger.info("加载了 %d 个摄像头的方向信息", len(self._camera_direction_map))
+
+    # ================================================================
+    # 跨摄时间对齐（T5）
+    # ================================================================
+
+    def _scene_ids_from_config(self) -> List[str]:
+        """场景 ID 列表（优先取 configs/default.yaml 的 camera.scenes）"""
+        scenes = self._config.get("camera.scenes", []) or []
+        scene_ids = [str(s.get("scene_id", "")) for s in scenes if isinstance(s, dict)]
+        scene_ids = [s for s in scene_ids if s]
+        if scene_ids:
+            return sorted(scene_ids)
+        # 配置里没有场景定义时，退回扫描目录（仍按文件名排序，保证确定性）
+        return sorted(p.stem for p in self._cam_timestamp_path("*").parent.glob("*.txt"))
+
+    def _cam_timestamp_path(self, scene_id: str) -> Path:
+        """拼接某场景的 cam_timestamp 文件绝对路径（相对项目根）"""
+        relative = self._cam_timestamp_template.format(scene=scene_id)
+        path = Path(relative)
+        return path if path.is_absolute() else self._root / self._dataset_dir / relative
+
+    def _load_camera_time_offsets(self) -> None:
+        """
+        加载各场景的摄像头时间偏移（本地时间 → 全局时间的秒数偏移）
+
+        文件格式（cam_timestamp/{scene}.txt，每行一个摄像头）::
+
+            c001 0
+            c002 1.640
+            c003 2.049
+
+        同一个摄像头可能出现在多个场景文件中（如 c016 同时在 S04 与 S05）。
+        按场景精确查表优先；跨场景兜底表按**场景名排序后先到先得**，保证
+        结果与加载顺序无关（确定性），冲突只记日志不静默覆盖。
+
+        幂等：只读一次盘，重复调用直接返回（`_get_scorer` 会独立触发一次，
+        保证评分器无论何时被构造都能拿到偏移表）。
+        """
+        if self._offsets_loaded:
+            return
+        if not self._time_alignment_enabled:
+            self._offsets_loaded = True
+            logger.info("跨摄时间对齐已关闭（configs/default.yaml time_alignment.enabled=false）")
+            return
+
+        loaded_scenes = 0
+        for scene_id in self._scene_ids_from_config():
+            path = self._cam_timestamp_path(scene_id)
+            try:
+                with open(path, "r", encoding="utf-8-sig") as f:
+                    lines = f.readlines()
+            except OSError as e:
+                # 缺文件不是致命错误：该场景保持本机时间（offset 视为 0）
+                logger.warning("摄像头时间偏移文件不可用: %s (%s)", path, e)
+                continue
+
+            count = 0
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                camera_id = parts[0]
+                try:
+                    offset = float(parts[1])
+                except ValueError:
+                    continue
+                self._camera_offsets_by_scene[(scene_id, camera_id)] = offset
+                count += 1
+
+                previous = self._camera_offsets_by_camera.get(camera_id)
+                if previous is None:
+                    self._camera_offsets_by_camera[camera_id] = (scene_id, offset)
+                elif previous[1] != offset:
+                    logger.warning(
+                        "摄像头 %s 在不同场景的偏移不一致（%s=%.3f vs %s=%.3f），"
+                        "跨场景兜底取先加载的 %s=%.3f；按场景精确查表不受影响",
+                        camera_id, previous[0], previous[1], scene_id, offset,
+                        previous[0], previous[1],
+                    )
+            if count:
+                loaded_scenes += 1
+
+        self._offsets_loaded = True
+        logger.info(
+            "跨摄时间偏移加载完成 | 场景=%d | 摄像头(场景维度)=%d | 摄像头(兜底)=%d",
+            loaded_scenes, len(self._camera_offsets_by_scene), len(self._camera_offsets_by_camera),
+        )
+
+    def camera_time_offset(
+        self, camera_id: str, scene_id: Optional[str] = None
+    ) -> Optional[float]:
+        """
+        取摄像头的全局时间偏移（秒）
+
+        按场景精确查表优先，查不到再退回跨场景兜底表；两条路都查不到时返回
+        None——调用方据此保持本机时间，**不要**拿 0.0 冒充"已对齐"。
+        """
+        if not self._time_alignment_enabled:
+            return None
+        if scene_id:
+            offset = self._camera_offsets_by_scene.get((scene_id, camera_id))
+            if offset is not None:
+                return offset
+        fallback = self._camera_offsets_by_camera.get(camera_id)
+        return fallback[1] if fallback is not None else None
+
+    def to_global_time(
+        self,
+        camera_id: str,
+        local_time: Optional[datetime],
+        scene_id: Optional[str] = None,
+    ) -> Optional[datetime]:
+        """
+        本机时间 → 全局时间（`本地时间 + 摄像头偏移`）
+
+        偏移未知时**原样返回本机时间**（等价于偏移 0），这样调用方无需分支；
+        是否真的对齐过由 `is_time_aligned()` 单独回答，避免"看起来对齐了"。
+        """
+        if local_time is None:
+            return None
+        offset = self.camera_time_offset(camera_id, scene_id)
+        if offset is None:
+            return local_time
+        return local_time + timedelta(seconds=offset)
+
+    def camera_offset_map(self) -> Dict[str, float]:
+        """
+        摄像头 → 全局偏移(秒) 的扁平映射（供评分器做跨镜时间换算）
+
+        同一摄像头出现在多个场景时取先加载的场景（与兜底表口径一致）；评分器
+        按 camera_id 查表，因此这里只保留一份。
+        """
+        return {cam: offset for cam, (_, offset) in self._camera_offsets_by_camera.items()}
+
+    def is_time_aligned(
+        self, src_camera_id: str, tgt_camera_id: str,
+        src_scene_id: Optional[str] = None, tgt_scene_id: Optional[str] = None,
+    ) -> bool:
+        """两侧摄像头都有已知偏移，且确实发生了对齐（用于输出里的可解释标注）"""
+        return (
+            self.camera_time_offset(src_camera_id, src_scene_id) is not None
+            and self.camera_time_offset(tgt_camera_id, tgt_scene_id) is not None
+        )
+
+    def _global_sort_key(self, camera_id: str, first_det: Dict[str, Any]):
+        """
+        摄像头先后排序键：场景 ID + 全局首现时间
+
+        先按场景分组（不同场景是不同视频，时间不可比），场景内按**全局**首现
+        时间排序。时间戳解析失败时排在最后，保证顺序确定。
+        """
+        scene_id = first_det.get("scene_id", "") or ""
+        local = _parse_timestamp(first_det.get("timestamp"))
+        if local is None:
+            return (scene_id, 1, datetime.max)
+        global_time = self.to_global_time(camera_id, local, scene_id) or local
+        return (scene_id, 0, global_time)
 
     # ================================================================
     # 惰性组件
@@ -443,20 +648,66 @@ class TrajectoryBuilder:
             self._road_topology = RoadTopology(str(self._camera_metadata_path))
         return self._road_topology
 
+    def _get_track_reid_map(self) -> Dict[str, np.ndarray]:
+        """
+        轨迹级 ReID 向量表（惰性 + 缓存），track_id -> (2048,) 已 L2 归一化。
+
+        数据由二期 T4 的 `scripts/build_reid_tracks.py` 产出，以**旁挂文件**形式
+        落盘（不改动 cityflow_results.json，避免 107MB JSON 再膨胀 ~50MB）：
+
+            output/reid/track_reid_vectors.npy  +  output/reid/track_ids.json
+
+        文件不存在（未跑 T4）时返回空表 —— 此时 avg_reid_vector 保持 None，
+        scoring 的 reid 维度按"无证据"处理并重分摊权重，与二期之前的行为一致，
+        不会因为缺文件而报错。
+        """
+        if self._track_reid_map is None:
+            self._track_reid_map = {}
+            try:
+                base = _PROJECT_ROOT / "output" / "reid"
+                vec_path = base / "track_reid_vectors.npy"
+                ids_path = base / "track_ids.json"
+                if vec_path.is_file() and ids_path.is_file():
+                    vectors = np.load(vec_path)
+                    with open(ids_path, encoding="utf-8") as f:
+                        ids = json.load(f)
+                    if len(ids) != len(vectors):
+                        logger.warning(
+                            "track ReID 表行数不一致: ids=%d vectors=%d，忽略该文件",
+                            len(ids), len(vectors),
+                        )
+                    else:
+                        self._track_reid_map = {
+                            tid: vectors[i] for i, tid in enumerate(ids)
+                        }
+                        logger.info("轨迹级 ReID 向量已加载: %d 条", len(ids))
+            except Exception as e:  # 缺文件/格式异常都不该影响主流程
+                logger.warning("加载轨迹级 ReID 向量失败，按无 ReID 处理: %s", e)
+                self._track_reid_map = {}
+        return self._track_reid_map
+
     def _get_scorer(self) -> BoundedCrossCameraScorer:
         """
         六维评分器（惰性 + 缓存）
 
         权重与惩罚项全部取自 configs/default.yaml 的 stitching.weights / stitching.penalties，
         车辆与行人各一套；速度区间沿用 src/stitching 的城区默认值（配置中无该项）。
+
+        同时传入摄像头全局时间偏移（T5），让时间/空间可达性维度按全局时间而非
+        各摄像头自己的本机时间计算跨镜间隔。
         """
         if self._scorer is None:
+            # 偏移表只依赖 6 个小文本文件，与检测数据无关：这里主动加载一次，
+            # 避免"评分器先于数据加载被构造"时缓存下一份空的偏移表
+            self._load_camera_time_offsets()
             self._scorer = BoundedCrossCameraScorer(
                 camera_manager=self._get_camera_manager(),
                 road_topology=self._get_road_topology(),
                 vehicle_weights=self._vehicle_weights,
                 pedestrian_weights=self._pedestrian_weights,
                 penalties=self._penalties,
+                camera_time_offsets=self.camera_offset_map(),
+                config=self._config,
             )
         return self._scorer
 
@@ -575,9 +826,12 @@ class TrajectoryBuilder:
 
         query_id = self._deterministic_query_id(instance_id, f"strong|{vehicle_id}")
 
-        # 按摄像头分组（dets 已按时间排序），按各摄像头首次出现时间排序
+        # 按摄像头分组（dets 已按时间排序），按各摄像头**全局**首次出现时间排序
+        # （本机时间跨摄像头不可比，见模块 docstring 的 T5 说明）
         camera_groups = self._group_by_camera(dets)
-        sorted_cameras = sorted(camera_groups, key=lambda c: camera_groups[c][0].get("timestamp", ""))
+        sorted_cameras = sorted(
+            camera_groups, key=lambda c: self._global_sort_key(c, camera_groups[c][0])
+        )
 
         # 每个摄像头构造一个 Tracklet（单摄轨迹），供评分器使用
         tracklets: List[Tracklet] = []
@@ -596,13 +850,25 @@ class TrajectoryBuilder:
             camera_dets = camera_groups[camera_id]
             cam_info = self._camera_meta.get(camera_id, {})
             tracklet_id = tracklet.tracklet_id
+            # timestamp 保持该摄像头的本机时间（前端已依赖该格式）；
+            # 全局时间只作为新增字段 global_timestamp 给出
+            local_start = _parse_timestamp(camera_dets[0].get("timestamp"))
+            global_start = self.to_global_time(
+                camera_id, local_start, camera_dets[0].get("scene_id")
+            )
             observation_nodes.append({
                 "camera_id": camera_id,
                 "camera_name": cam_info.get("name", camera_id),
                 "tracklet_id": tracklet_id,
                 "timestamp": _format_ts_full(camera_dets[0].get("timestamp", "")),
+                # 新增字段：本机时间 + 该摄像头全局偏移（偏移未知时等于本机时间）
+                "global_timestamp": _format_ts_full(global_start) if global_start else None,
+                "time_offset_seconds": self.camera_time_offset(
+                    camera_id, camera_dets[0].get("scene_id")
+                ),
                 "latitude": cam_info.get("latitude"),
                 "longitude": cam_info.get("longitude"),
+                "scene_gps_center": cam_info.get("scene_gps_center"),
                 "keyframe_path": camera_dets[0].get("keyframe_path"),
                 "confidence": round(camera_dets[0].get("confidence", 0.0), 3),
                 # 依据标注：该观测来自真实 vehicle_id 的检测
@@ -754,6 +1020,7 @@ class TrajectoryBuilder:
                 "timestamp": _format_ts_full(node.timestamp),
                 "latitude": cam_info.get("latitude"),
                 "longitude": cam_info.get("longitude"),
+                "scene_gps_center": cam_info.get("scene_gps_center"),
                 "keyframe_path": node.keyframe_path,
                 # 非锚点节点的"置信度"是拼接边得分，不是检测置信度
                 "confidence": None if is_anchor else round(node.confidence, 4),
@@ -895,7 +1162,8 @@ class TrajectoryBuilder:
         - `crop_path` / `keyframe_path` 有，直接映射为 keyframe_path
         - `clip_image_vector` 仅部分检测带（本数据集 949/68349），有则求均值作为
           avg_clip_vector，没有就留 None（评分器会回退到中性 0.5）
-        - ReID 向量本数据集完全没有 → 恒为 None
+        - ReID 向量取**轨迹级**旁挂表（二期 T4 产出，见 _get_track_reid_map）。
+          表不存在时留 None —— 与二期之前的行为一致，评分器按"无证据"重分摊权重。
         - 车牌本数据集完全没有 → plate_number=None（评分器按"双方都无"给中性 0.5）
         - direction 用摄像头元数据的车道方向（英文），与既有 /trajectory 的口径一致
         """
@@ -962,7 +1230,7 @@ class TrajectoryBuilder:
             direction=self._lane_direction(camera_id),
             plate_number=None,
             attributes=first.get("attributes", {}) or {},
-            avg_reid_vector=None,
+            avg_reid_vector=self._get_track_reid_map().get(tracklet_id),
             avg_clip_vector=avg_clip,
             keyframe_paths=keyframe_paths,
             scene_id=first.get("scene_id"),
@@ -1004,7 +1272,12 @@ class TrajectoryBuilder:
         由连接边生成推断段
 
         - `confidence`   ← 六维评分器的真实得分
-        - `actual_travel_time`  ← 两个单摄轨迹真实时间的差值（秒）
+        - `actual_travel_time`  ← 两个单摄轨迹**全局**时间的差值（秒）：
+          目标首现于 tgt − 末现于 src。本数据集的 timestamp 是各摄像头自己的
+          视频内时间（每路都从 0 起跳），直接相减必然错位甚至恒为负，因此先
+          用 cam_timestamp 的偏移换算成全局时间再相减（T5）。换算后仍为负
+          （数据异常 / 两侧观测确实重叠）就留 None，不取绝对值凑数。
+        - `local_travel_time`   ← 对齐前的本机时间差值，仅作诊断对照
         - `estimated_travel_time` ← 仅在道路拓扑给出真实距离时才有值
           （距离 ÷ 评分器城区速度区间中值）；距离未知则留 None，不造数
         """
@@ -1028,10 +1301,19 @@ class TrajectoryBuilder:
                 distance = None
             estimated = round(distance / mid_speed_mps, 1) if distance else None
 
-            # 本数据集的 timestamp 是各摄像头自己的视频内时间，跨摄像头会重叠，
-            # 因此 (目标首次出现 - 源最后出现) 可能为负 —— 此时无法得出真实行程时间，
-            # 留 None，绝不用绝对值或常数凑数
-            gap = (tgt_tracklet.start_time - src_tracklet.end_time).total_seconds()
+            # ---- 跨摄时间对齐（T5）----
+            src_offset = self.camera_time_offset(src_cam, src_tracklet.scene_id)
+            tgt_offset = self.camera_time_offset(tgt_cam, tgt_tracklet.scene_id)
+            src_end_global = self.to_global_time(
+                src_cam, src_tracklet.end_time, src_tracklet.scene_id
+            )
+            tgt_start_global = self.to_global_time(
+                tgt_cam, tgt_tracklet.start_time, tgt_tracklet.scene_id
+            )
+            local_gap = (tgt_tracklet.start_time - src_tracklet.end_time).total_seconds()
+            gap = (tgt_start_global - src_end_global).total_seconds() if (
+                src_end_global is not None and tgt_start_global is not None
+            ) else local_gap
             actual = round(gap, 3) if gap >= 0 else None
 
             segments.append({
@@ -1048,10 +1330,16 @@ class TrajectoryBuilder:
                 "confidence": round(float(edge.score), 4),
                 "estimated_travel_time": estimated,
                 "actual_travel_time": actual,
+                # 诊断对照：对齐前的本机时间差值（负值即"错位"的直接证据）
+                "local_travel_time": round(local_gap, 3),
+                # 时间对齐的可解释标注：两侧摄像头偏移都已知才算真的对齐过
+                "time_aligned": src_offset is not None and tgt_offset is not None,
+                "source_time_offset_seconds": src_offset,
+                "target_time_offset_seconds": tgt_offset,
                 "route_description": (
                     f"{src_info.get('name', src_cam)} → {tgt_info.get('name', tgt_cam)}"
                     f"（六维得分 {edge.score:.3f}，惩罚 {edge.penalty:.3f}"
-                    + ("；两侧观测时间重叠，实际行程时间无法确定" if actual is None else "")
+                    + ("；两侧观测全局时间重叠，实际行程时间无法确定" if actual is None else "")
                     + "）"
                 ),
                 # 评分明细（可解释性）
@@ -1265,18 +1553,34 @@ class TrajectoryBuilder:
         for camera_id in camera_groups:
             camera_groups[camera_id].sort(key=lambda d: d.get("timestamp", ""))
 
+        # 摄像头先后按**全局**首现时间排序（本机时间跨摄像头不可比，见 T5 说明）
         camera_sequence = []
         for camera_id, cam_dets in sorted(
-            camera_groups.items(), key=lambda item: item[1][0].get("timestamp", "")
+            camera_groups.items(),
+            key=lambda item: self._global_sort_key(item[0], item[1][0]),
         ):
             arrival = cam_dets[0].get("timestamp", "")
             departure = cam_dets[-1].get("timestamp", "")
+            scene_id = cam_dets[0].get("scene_id")
+            global_arrival = self.to_global_time(
+                camera_id, _parse_timestamp(arrival), scene_id
+            )
+            global_departure = self.to_global_time(
+                camera_id, _parse_timestamp(departure), scene_id
+            )
             cam_info = self._camera_meta.get(camera_id, {})
             camera_sequence.append({
                 "camera_id": camera_id,
                 "camera_name": cam_info.get("name", camera_id),
                 "arrival_time": _format_ts_full(arrival),
                 "departure_time": _format_ts_full(departure),
+                # 新增字段：全局到达/离开时间与偏移（本机时间字段保持原样）
+                "global_arrival_time": _format_ts_full(global_arrival) if global_arrival else None,
+                "global_departure_time": (
+                    _format_ts_full(global_departure) if global_departure else None
+                ),
+                "time_offset_seconds": self.camera_time_offset(camera_id, scene_id),
+                # 单摄持续时长只看同一摄像头内的时间，本机时间即可
                 "duration_seconds": _duration_seconds(arrival, departure),
                 "detection_count": len(cam_dets),
                 "direction": self._camera_direction_map.get(camera_id, ""),
@@ -1294,11 +1598,17 @@ class TrajectoryBuilder:
                 "basis_text": f"{BASIS_TEXT[BASIS_STRONG]}（真实 vehicle_id={vehicle_id}）",
             })
 
+        # 跨镜总时长必须用全局时间：本机时间跨摄像头错位，差值没有意义
         first_arrival = camera_sequence[0]["arrival_time"] if camera_sequence else ""
         last_departure = camera_sequence[-1]["departure_time"] if camera_sequence else ""
         total_duration = _duration_seconds(
             first_arrival.replace("--", ""), last_departure.replace("--", "")
         )
+        if camera_sequence:
+            first_global = camera_sequence[0].get("global_arrival_time")
+            last_global = camera_sequence[-1].get("global_departure_time")
+            if first_global and last_global:
+                total_duration = _duration_seconds(first_global, last_global)
 
         attrs = vehicle_dets[0].get("attributes", {}) or {}
         color_id = attrs.get("color_id", -1)
@@ -1321,6 +1631,13 @@ class TrajectoryBuilder:
             "vehicle_id": vehicle_id,
             "first_appearance": first_arrival,
             "last_appearance": last_departure,
+            # 新增字段：跨镜首末出现的全局时间（first/last_appearance 保持本机时间）
+            "global_first_appearance": (
+                camera_sequence[0].get("global_arrival_time") if camera_sequence else None
+            ),
+            "global_last_appearance": (
+                camera_sequence[-1].get("global_departure_time") if camera_sequence else None
+            ),
             "total_duration_seconds": total_duration,
             "total_cameras": len(camera_sequence),
             "total_detections": sum(len(c["frames"]) for c in camera_sequence),

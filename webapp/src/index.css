@@ -1,0 +1,41 @@
+/* 全局深色底 + 少量 Leaflet 深色适配 */
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #0b1220;
+  color: rgba(255, 255, 255, 0.88);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* 数字列对齐，避免分数跳动 */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Leaflet 弹窗在深色主题下的可读性 */
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: #141c2b;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.leaflet-container {
+  font-family: inherit;
+}
+
+/* 自绘摄像头标记不参与默认图标样式 */
+.camera-map-dot {
+  background: transparent;
+  border: none;
+}
