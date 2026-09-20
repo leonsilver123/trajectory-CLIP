@@ -4,7 +4,7 @@ tests/test_data_models.py - 数据模型测试
 测试目标: 验证 src/common/data_models.py 中所有核心数据结构的正确性
 覆盖:
   - BoundingBox: 创建、width/height/area/center 属性计算
-  - BoundingBox.iou(): 测试 IoU 计算（未实现则标记 xfail）
+  - BoundingBox.iou(): 测试 IoU 计算（已实现，正常断言）
   - CameraMetadata: 创建、可选字段、distance_to() 方法
   - TargetInstance: 创建、has_plate/has_reid/has_clip 属性
   - Tracklet: 创建、duration_seconds/instance_count 属性
@@ -89,7 +89,6 @@ class TestBoundingBox:
         assert bbox.height == 0
         assert bbox.area == 0
 
-    @pytest.mark.xfail(reason="BoundingBox.iou() 尚未实现，抛出 NotImplementedError")
     def test_iou_overlap(self):
         """测试 IoU 计算 - 有重叠"""
         bbox1 = BoundingBox(x1=0, y1=0, x2=100, y2=100, confidence=0.9)
@@ -99,7 +98,6 @@ class TestBoundingBox:
         expected = 2500.0 / 17500.0
         assert abs(iou - expected) < 1e-6
 
-    @pytest.mark.xfail(reason="BoundingBox.iou() 尚未实现，抛出 NotImplementedError")
     def test_iou_no_overlap(self):
         """测试 IoU 计算 - 无重叠"""
         bbox1 = BoundingBox(x1=0, y1=0, x2=50, y2=50, confidence=0.9)
@@ -107,7 +105,6 @@ class TestBoundingBox:
         iou = bbox1.iou(bbox2)
         assert iou == 0.0
 
-    @pytest.mark.xfail(reason="BoundingBox.iou() 尚未实现，抛出 NotImplementedError")
     def test_iou_identical(self):
         """测试 IoU 计算 - 完全相同"""
         bbox1 = BoundingBox(x1=10, y1=10, x2=90, y2=90, confidence=0.9)

@@ -55,8 +55,8 @@ DATASTORE_DIRNAME = "datastore"
 DETECTIONS_PARQUET = "detections.parquet"
 TRACKS_PARQUET = "tracks.parquet"
 META_SQLITE = "meta.sqlite"
-IMAGE_VECTORS_NPY = "det_image_vectors.npy"   # 内联 768 维图像向量（仅部分检测带）
-TEXT_VECTORS_NPY = "det_text_vectors.npy"     # 内联 768 维文本向量
+IMAGE_VECTORS_NPY = "det_image_vectors.npy"   # 内联图像向量（仅部分检测带；已统一为 512 维，与检索索引一致）
+TEXT_VECTORS_NPY = "det_text_vectors.npy"     # 内联文本向量（仍为 768 维；未参与在线检索，见 PLAN3-B3）
 VECTOR_INDEX_NPY = "det_vector_rows.npy"      # 上述向量对应的检测行号
 
 # datastore 里必须同时存在的文件（缺任一即视为不可用 → 回退 JSON）

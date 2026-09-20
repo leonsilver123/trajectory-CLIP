@@ -126,14 +126,24 @@ plate_ocr:
   confidence_threshold: 0.7
 
 # 特征提取
+#
+# ⚠️ 下面的 feature.* 与 retrieval.* 段目前**没有任何代码读取**
+# （实测：全仓对 `feature.clip` / `feature.reid` / `retrieval.clip_model` /
+# `retrieval.vector_db` / `retrieval.top_k` 的引用数均为 0）。
+# 它们描述的是**设计口径**，改这里不会改变运行时行为 ——
+# 实际生效的模型与索引在 api/routes/search.py 里（见下方注释）。
+# 保留本段是为了记录设计意图；接入前请勿把它当作开关。
 feature:
   reid:
-    model: "osnet_x1_0"             # torchreid 模型
-    vector_dim: 512
+    model: "fast-reid SBS R50-ibn"  # 实际生效：scripts/extract_reid.py（三权重集成）
+    vector_dim: 2048                # 实测为**检测级 2048 维**（非 512）
     batch_size: 32
   clip:
-    model: "CN-CLIP-ViT-L-14"      # Chinese-CLIP 模型
-    vector_dim: 768
+    # 实际生效的是 Chinese-CLIP **ViT-B-16 / 512 维**（api/routes/search.py:101-122，
+    # 经 cn_clip.load_from_name("ViT-B-16")），**不是** ViT-L-14 / 768 维。
+    # 两套向量曾长期混用，已于 scripts/unify_clip_949.py + merge_clip_unified.py 统一为 512。
+    model: "CN-CLIP-ViT-B-16"
+    vector_dim: 512
     batch_size: 16
 
 # 质量评分
@@ -153,10 +163,22 @@ stitching:
   weights:
     vehicle:
       plate: 0.35                   # 车牌一致性
+                                    # ⚠️ 本数据集**零车牌覆盖**（实测 68,349 条检测中
+                                    # 带 plate_number 的为 0 条），因此这一维恒为"无证据"、
+                                    # 每次评分都被 reweight_missing_dimensions 整维剔除。
+                                    # 也就是说这个权重在当前数据上是**理论值**，
+                                    # 实际不参与打分。等真实车牌可用时它才会生效。
       temporal: 0.40                # 时间可达性（P-A 实测最可靠，调高）
       topology: 0.15                # 摄像头拓扑
       reid: 0.0                     # ReID 外观（P-A 实测软评分权重是噪声→置零；外观仍由规则8硬门控过滤）
       attribute: 0.0                # 属性一致性（P-A 实测跨镜一致率仅28-37%，软评分是噪声→置零；仍由规则7硬门控）
+      # 上面五项之和为 0.90；余下 0.10 由方向一致性加分项补齐
+      # （scoring.py 的 DIRECTION_BONUS_WEIGHT，恒定计入、不参与归一化），
+      # 因此总分上限恰为 1.00。
+      #
+      # 实测当前数据上的**生效权重**（scoring.explain_dimensions）：
+      #   temporal 0.6545 / topology 0.2455，plate 被剔除。
+      # 即"六维评分函数"在本数据集上实际退化为「时间可达性 + 路网拓扑 + 方向」三项。
     pedestrian:
       temporal: 0.35                # 时空可达性
       reid: 0.30                    # ReID 外观
@@ -172,15 +194,26 @@ stitching:
   reweight_missing_dimensions: true
 
 # 文本检索
+#
+# ⚠️ 同 feature 段：本段**没有任何代码读取**，描述的是设计口径而非开关。
+# 在线检索的实际行为见 api/routes/search.py：
+#   - 向量库是 **FAISS**（output/clip_vectors.faiss，IndexFlatIP，68,349×512），
+#     不是 Qdrant。Qdrant 在 docker-compose 里起了容器，但**没有任何消费者**（PLAN3-F4）。
+#   - 融合权重是硬编码的 ALPHA=0.6：final = 0.6*clip_score + 0.4*attr_score。
 retrieval:
-  top_k: 20                         # 召回数量
-  vector_db: "qdrant"               # 向量数据库类型
+  top_k: 20                         # 设计口径：返回候选数（实际由路由内部分页控制）
+  vector_db: "faiss"                # 实际生效的向量库
+  faiss:
+    index_file: "output/clip_vectors.faiss"   # IndexFlatIP，68,349 × 512
+    metric: "inner_product"                   # 向量已 L2 归一化，内积等价余弦
+  # Qdrant 接入骨架：保留配置以便将来启用，当前**未接线**
   qdrant:
+    enabled: false
     host: "localhost"
     port: 6333
     collection_name: "traffic_targets"
-  clip_model: "CN-CLIP-ViT-L-14"
-  rerank_top_n: 5                   # 重排后返回数量
+  clip_model: "CN-CLIP-ViT-B-16"    # 实际生效（非 ViT-L-14）
+  rerank_top_n: 5                   # 设计口径：重排后返回数量
 
 # 轨迹回溯
 backtrack:

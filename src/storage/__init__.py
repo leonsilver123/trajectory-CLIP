@@ -1,7 +1,7 @@
 """
 src.storage - 数据存储层
 
-对外只暴露 src.storage.datastore 的统一读写接口，供 api/、frontend/、src/trajectory
+对外只暴露 src.storage.datastore 的统一读写接口，供 api/、src/trajectory
 等消费方共用；离线构建脚本 scripts/build_datastore.py 也依赖这里的布局常量。
 """
 

@@ -54,7 +54,7 @@
 | **任何用本数据训练/微调的模型**（含 T12 若执行的微调产物） | ✅ 是（§2(a) 逐字包含"models developed using the DATASET"） |
 | `configs/cityflow_camera_metadata.yaml` 的**摄像头 GPS 坐标** | ✅ 是（§Description-2 明确 GPS 属 DATASET "Metadata"） |
 | 轨迹的**自然语言描述** | ✅ 是（同上，"natural language descriptions for vehicle tracks"） |
-| **`src/`、`api/`、`frontend/` 本项目自有代码** | ❌ 否 —— 这是自研代码，许可由本项目自定 |
+| **`src/`、`api/`、`webapp/` 本项目自有代码** | ❌ 否 —— 这是自研代码，许可由本项目自定 |
 
 → 即：**"数据/模型层不可商用，软件层可商用"这个判断依然成立**，但见第二节。
 
@@ -82,7 +82,7 @@ ultralytics   ver=8.4.80   License='AGPL-3.0'
 | `src/perception/detector.py:84-85`（`from ultralytics import YOLO`） | ✅ 是 | 属 `src/` 包，随产品一起交付 |
 | `scripts/`（6 个文件） | ✅ 是 | 离线预处理 |
 | **`api/`（部署中的服务路径）** | ❌ **否** | 服务只读预计算 JSON + FAISS，**不跑 YOLO** |
-| `frontend/` | ❌ 否 | — |
+| `webapp/`（前端，仅静态产物，不含推理依赖） | ❌ 否 | — |
 
 → **重要区别（已实测证实，非推断）**：**正在运行的服务（`api/`）本身不触发 AGPL**。
 
@@ -108,10 +108,10 @@ AGPL 就会被触发。这个边界必须在商务材料里说清楚，不能含
 
 | 组件 | 许可 | 验证方式 | 商用影响 |
 |---|---|---|---|
-| `third_party/fast-reid`（ReID） | **Apache-2.0** | 读 `third_party/fast-reid/LICENSE` 头部 | ✅ 无阻塞 |
+| `fast-reid`（ReID，**按需 clone 不入库**） | **Apache-2.0** | 上游仓库 `JDAI-CV/fast-reid` 的 LICENSE；本仓库不再 vendored 该源码树 | ✅ 无阻塞 |
 | `paddlepaddle` | **Apache-2.0** | 已安装 metadata classifier | ✅ 无阻塞 |
 | `torch` | **BSD-3-Clause** | 已安装 metadata | ✅ 无阻塞 |
-| `faiss-cpu` / `fastapi` / `pydantic` / `streamlit` | metadata **未声明** | 实测 License 字段为空 | ⚠️ 需逐个补核（上游均为 MIT/BSD/Apache，但**本机无法证实**） |
+| `faiss-cpu` / `fastapi` / `pydantic` | metadata **未声明** | 实测 License 字段为空 | ⚠️ 需逐个补核（上游均为 MIT/BSD/Apache，但**本机无法证实**） |
 | `cn-clip` 1.6.0 | metadata **未声明** | License 字段为空，仅 Home-page=`github.com/OFA-Sys/Chinese-CLIP` | ⚠️ **未验证**；上游仓库据称为 MIT，但本项目**未取证**，商务使用前必须核实 |
 | PULC `vehicle_attribute_infer` 权重 | 未验证 | 本地仅有模型文件 | ⚠️ PaddlePaddle 生态通常 Apache-2.0，**但权重未取证** |
 | `yolov8x.pt` 权重 | 随 ultralytics，**AGPL-3.0** | 与 2.1 同源 | 🔴 同上 |
@@ -146,6 +146,6 @@ AGPL 就会被触发。这个边界必须在商务材料里说清楚，不能含
 
 ## 五、待办（未完成项，如实列出）
 
-- [ ] 逐个核实 `faiss` / `fastapi` / `pydantic` / `streamlit` / `cn-clip` / PULC 权重的许可（本机 metadata 未声明）
+- [ ] 逐个核实 `faiss` / `fastapi` / `pydantic` / `cn-clip` / PULC 权重的许可（本机 metadata 未声明）
 - [ ] 若走商用路径 C：评估替换 `src/perception/detector.py` 检测器的改动量与精度影响
 - [ ] 前端演示模式加入人脸/车牌打码开关（§1(iii) 要求）

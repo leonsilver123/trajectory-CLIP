@@ -1,3 +1,14 @@
+"""
+⚠️ 历史脚本声明（2026-09-21 加注）
+
+本脚本用于生成早期的技术说明书 DOCX，其内容描述的是**当时的架构**：
+前端为 Streamlit（`frontend/`）、compose 编排 backend/frontend/qdrant 三服务、
+回溯模块为 `src/backtrack/`。这些均已变化（详见 `CLAUDE.md`）。
+
+生成的产物（`*_面试版.docx`）已作为个人材料从仓库移除。
+本脚本保留仅为记录文档生成方式；若要重新使用，**须先更新其中的架构描述**，
+否则会生成一份与代码不符的文档 —— 那正是本项目反复踩过的坑。
+"""
 from __future__ import annotations
 
 import json

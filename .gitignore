@@ -12,10 +12,14 @@ models/
 *.bin
 
 # ---------- 数据产物（大） ----------
-output/
-data/
+# 注意：这里必须写成 /output/（锚定仓库根）。
+# 写成 output/ 会连带匹配 src/output/，把 481 行的 trajectory_output.py
+# 一起挡在版本控制之外 —— 而且 ripgrep 默认跳过被 ignore 的路径，
+# 常规搜索根本看不到这个包（曾因此长期无人发现）。
+/output/
+/data/
 docker_data/
-logs/
+/logs/
 *.faiss
 *.pkl
 *.h5
@@ -32,9 +36,22 @@ cityflow/
 # 所以这里只排除 storage 子目录，不能整目录排除 docker/。
 docker/qdrant_storage/
 
-# 单文件大结果（107MB）
+# ---------- 第三方源码树（不入库） ----------
+# fast-reid 是 395 个文件的外来代码，且 scripts/extract_reid.py 自己的报错信息
+# 就写着"去 git clone 它"—— 说明它本来就是外部依赖，不该 vendored 进仓库。
+# 2026-09-21 已从跟踪中移除（本地文件保留，不影响现有环境）。
+# 新环境准备：git clone --depth 1 https://github.com/JDAI-CV/fast-reid.git third_party/fast-reid
+/third_party/
+
+# ---------- 单文件大结果与调试输出 ----------
 cityflow_results.json
 results.json
+# 调试/冒烟脚本的原始输出（曾有一批被提交进仓库）
+stout.txt
+sterr.txt
+test_diag_out.txt
+frontend_start_err.txt
+frontend_start_out.txt
 
 # ---------- 虚拟环境 ----------
 .venv/
@@ -65,7 +82,8 @@ htmlcov/
 # ---------- 前端 / 临时渲染 ----------
 .tmp-render/
 node_modules/
-.streamlit/secrets.toml
+# webapp/dist 是构建产物：由 `cd webapp && npm run build` 生成，
+# 后端会托管它（api/main.py::_mount_frontend）。构建产物不入库。
 
 # ---------- 编辑器 / 系统 ----------
 .vscode/
@@ -77,8 +95,8 @@ Thumbs.db
 # ---------- 运行日志与临时文件 ----------
 *.log
 *.tmp
-frontend_start_err.txt
-frontend_start_out.txt
 
 # 临时实验脚本目录（本会话 probe 用）
 .tmp-webapp/
+.tmp-probe/
+.tmp-interview/

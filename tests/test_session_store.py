@@ -170,6 +170,79 @@ class TestIsolation:
         assert {s["query_id"] for s in sessions} == {"Q_040", "Q_041"}
 
 
+class TestCapacityEviction:
+    """容量上限与 LRU 淘汰（D1）
+
+    背景：每次检索都会 create 一条会话且从不删除，长驻进程下内存只增不减。
+    这里锁定「超限淘汰最久未访问者」的语义。
+    """
+
+    def test_evicts_oldest_when_over_capacity(self):
+        """超过上限时淘汰最久未访问的会话"""
+        s = SessionStore(max_sessions=3)
+        for i in range(5):
+            s.create(f"Q{i}", f"query{i}")
+
+        alive = {x["query_id"] for x in s.list_all()}
+        assert s.count() == 3
+        assert alive == {"Q2", "Q3", "Q4"}, alive
+        assert s.evicted_count == 2
+
+    def test_read_refreshes_recency(self):
+        """被读过的会话不应比闲置会话先被淘汰"""
+        s = SessionStore(max_sessions=3)
+        for i in range(3):
+            s.create(f"Q{i}")
+        s.get("Q0")          # Q0 变成最近访问，Q1 成为最久未访问
+        s.create("Q3")
+
+        alive = {x["query_id"] for x in s.list_all()}
+        assert "Q0" in alive, "刚读过的 Q0 不该被淘汰"
+        assert "Q1" not in alive, "最久未访问的 Q1 应被淘汰"
+
+    def test_transition_refreshes_recency(self):
+        """状态转移（确认）也算访问，会话不应在流转中被淘汰"""
+        s = SessionStore(max_sessions=3)
+        for i in range(3):
+            s.create(f"Q{i}")
+        s.confirm("Q0", INSTANCE_ID)
+        s.create("Q3")
+
+        alive = {x["query_id"] for x in s.list_all()}
+        assert "Q0" in alive, "已确认的会话不该被淘汰"
+
+    def test_evicted_session_reports_not_found(self):
+        """被淘汰的 query_id 后续访问应得到"不存在"，而不是脏数据"""
+        s = SessionStore(max_sessions=1)
+        s.create("OLD")
+        s.create("NEW")
+
+        assert s.get("OLD") is None
+        with pytest.raises(SessionNotFoundError):
+            s.require("OLD")
+
+    def test_zero_means_unlimited(self):
+        """max_sessions<=0 表示不限制（仅用于测试对照）"""
+        s = SessionStore(max_sessions=0)
+        for i in range(50):
+            s.create(f"Q{i}")
+        assert s.count() == 50
+        assert s.evicted_count == 0
+
+    def test_default_cap_is_positive(self):
+        """默认上限必须是正数 —— 上限为 0 等于没有上限，会重新变成内存泄漏"""
+        assert SessionStore().max_sessions > 0
+
+    def test_overwrite_existing_key_counts_once(self):
+        """同 query_id 重复 create 是覆盖，不应让计数虚增"""
+        s = SessionStore(max_sessions=2)
+        s.create("Q0")
+        s.create("Q0")
+        s.create("Q0")
+        assert s.count() == 1
+        assert s.evicted_count == 0
+
+
 class TestSingleton:
     """全局单例"""
 

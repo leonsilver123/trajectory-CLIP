@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -1648,9 +1649,14 @@ class TrajectoryBuilder:
 
 # ============================================================
 # 全局单例（沿用项目里"模块级惰性缓存"的惯例）
+#
+# 双检锁：FastAPI 的同步端点跑在线程池里，两个 worker 并发首次回溯时
+# 可能同时看到 `_builder is None`，各自构造一个 Builder —— 白付一次数据加载，
+# 且两份结果缓存互相不可见。写法与 `src/common/session_store.py` 的单例对齐。
 # ============================================================
 
 _builder: Optional[TrajectoryBuilder] = None
+_builder_lock = threading.Lock()
 
 
 def get_trajectory_builder() -> TrajectoryBuilder:
@@ -1662,5 +1668,14 @@ def get_trajectory_builder() -> TrajectoryBuilder:
     """
     global _builder
     if _builder is None:
-        _builder = TrajectoryBuilder()
+        with _builder_lock:
+            if _builder is None:
+                _builder = TrajectoryBuilder()
     return _builder
+
+
+def reset_trajectory_builder() -> None:
+    """重置全局构建器（主要用于测试）"""
+    global _builder
+    with _builder_lock:
+        _builder = None

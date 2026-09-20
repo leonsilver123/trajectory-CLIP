@@ -19,6 +19,24 @@ H:/trajectory-CLIP/.venv/Scripts/python.exe -m uvicorn api.main:app --host 127.0
 > - `0.0.0.0` —— 监听所有网卡，**同局域网内任何人都能访问**（且本服务无鉴权）。
 >   仅在确实需要多人/跨机访问时使用，并自行评估暴露风险。
 
+> 🔴 **本服务没有任何鉴权，不要直接暴露到公网。**
+>
+> 两个容易忽略的暴露面（PLAN3-E2）：
+> 1. **容器部署默认就是全网卡**：`Dockerfile.backend` 显式传 `--host 0.0.0.0`，
+>    所以 `docker compose up` 之后，同网段任何人都能访问 8000 端口。
+> 2. **`cors_origins` 默认 `["*"]`**：这**不是**安全措施 —— 它只影响浏览器跨域，
+>    挡不住直连（curl / 脚本）。收紧它并不能替代鉴权。
+>
+> 若必须对外提供服务，最小方案是在前面加一层带认证的反向代理（网关 Basic Auth
+> 或内网 ACL），而不是依赖本服务自身的配置。仓库里的 `docker/nginx.conf`
+> 是一份反代样例，可按需在其上启用认证。
+
+> **静态资源暴露面（已收窄）**：`/static` **只**挂载图片目录白名单
+> （`api/main.py::_STATIC_IMAGE_DIRS`：aicity22_crops、aicity22_frames、
+> cityflow_crops、crops、demo_detections、pipeline_test）。
+> 早先这里挂的是整个 `output/`，会让 `cityflow_results.json`（全量数据）、
+> `datastore/*.parquet`、`meta.sqlite` 可被直接下载。新增目录必须在白名单里显式登记。
+
 `api/main.py::_mount_frontend()` 会把 `webapp/dist/` 挂到根路径：
 - `/assets/*` → Vite 产物（JS/CSS），标准静态文件服务
 - 其余路径 → 命中 `dist/` 真实文件就返回，否则回 `index.html`（SPA 兜底）
@@ -152,21 +170,29 @@ CHROME="/c/Program Files/Google/Chrome/Application/chrome.exe"
 
 ---
 
-## 六、Docker（可选，未在本轮验证）
+## 六、Docker（未实测 —— 本机未起 Docker）
 
 ```bash
-docker compose up -d      # backend :8000 / frontend :8501 / qdrant :6333
+docker compose up -d      # 只有一个服务：backend :8000
 ```
 
-⚠️ **该 compose 已确认过时，本轮未实测（未起 Docker）**，取证：
+**前端不再单独起容器。** 2026-09-21 起前端统一为 `webapp/`（React），
+其构建产物由后端同源托管 —— 访问 `http://<host>:8000/` 即是完整界面。
+原先的 Streamlit 服务（`frontend/`、`Dockerfile.frontend`、8501 端口）已删除，
+Qdrant 服务也已注释停用（零消费者，见 `docker-compose.yml` 内的说明）。
 
-- `Dockerfile.frontend:65` 仍是 `CMD ["streamlit","run","frontend/app.py", …]`，
-  且只 `COPY frontend/`、**从不 COPY `webapp/`** ⇒ 按此构建出来的镜像跑的是**一期的旧 Streamlit 前端**，
-  不会服务二期的新前端。
-- `Dockerfile.backend:55` 是 `uvicorn api.main:app`，这一条**依然有效**
-  （`api/main.py` 已能托管 `dist/`，只要镜像里构建了 `webapp/dist/` 即可）。
+已验证 / 未验证，分开说：
 
-**若要容器化二期前端**，需改 `Dockerfile.frontend` 为 multi-stage：
-`node:24` 阶段 `npm ci && npm run build` → 把 `webapp/dist/` 拷进后端镜像 `webapp/dist/`，
-然后**只跑一个后端容器**（前端由 `api/main.py` 一并托管，见 §一），
-`compose` 里的 8501 前端服务可以直接删掉。**本轮未实施。**
+| 项 | 状态 |
+|---|---|
+| `docker-compose.yml` 可解析、无悬空 `depends_on` | ✅ 已用 yaml 解析校验 |
+| `services` 仅剩 `backend` | ✅ 同上 |
+| `Dockerfile.backend` 的 `COPY . .` 会带上 `webapp/dist/`（2.4MB） | ✅ 已核对 `.dockerignore` 未排除它 ⇒ 容器起来即有 UI |
+| `.dockerignore` 排除 `node_modules/` 与 `third_party/` | ✅ 已补（此前未排除，`COPY . .` 会把数百 MB 依赖塞进构建上下文） |
+| **镜像真的能构建并跑起来** | ❌ **未实测**（本机没起 Docker）。首次部署请自行验一遍 |
+
+> ⚠️ `models/` 与 `output/` 被 `.dockerignore` 排除，镜像内**不存在**模型与索引，
+> 必须由 compose 用 volume 挂载进去；只排除不挂载会让 CLIP 加载与 FAISS 读取失败并静默降级。
+>
+> ⚠️ 记得先构建前端产物再 build 镜像：`cd webapp && npm ci && npm run build`。
+> 不构建的话 `dist/` 不存在，后端会**跳过**前端托管、只提供 API（这是有意的向后兼容行为）。

@@ -1,5 +1,15 @@
 # 高精度车辆文搜图与轨迹研判平台 -- 算法技术报告
 
+> ## ⚠️ 历史文档声明（2026-09-21 加注）
+>
+> 本文写于早期阶段，其中关于**前端**与**模块结构**的描述已过时：
+> 前端已由 `frontend/`（Streamlit）统一为 `webapp/`（React + Vite，后端同源托管，
+> 无独立容器、无 8501 端口）；`src/backtrack/`、`src/data_governance/video_stream.py`、
+> `api/dependencies.py` 已删除；`docker-compose.yml` 现仅剩 backend 一个服务。
+> **当前架构以 `CLAUDE.md` 与代码为准。**
+
+---
+
 > **版本**: v1.0 | **日期**: 2026 年 6 月  
 > **关键词**: Chinese-CLIP, YOLOv8x, 双层检索, 跨镜轨迹拼接, 融合打分, 不确定性可视化
 

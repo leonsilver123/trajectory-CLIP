@@ -163,7 +163,9 @@ class TestJsonFallback:
 class TestConvergence:
     """散落的 JSON 读取必须收敛到 src/storage/datastore.py 一处"""
 
-    _SCOPES = ("api", "src", "frontend")
+    # frontend/（Streamlit）已于 2026-09-21 下线，其读取点随之消失；
+    # 幸存的前端 webapp/ 是 TypeScript，不直接读数据文件（只调后端接口）。
+    _SCOPES = ("api", "src")
 
     def _iter_py(self):
         for scope in self._SCOPES:
@@ -172,7 +174,7 @@ class TestConvergence:
                     yield path
 
     def test_only_datastore_opens_cityflow_json(self):
-        """全仓（api/src/frontend）只有 src/storage/datastore.py 会打开 cityflow_results.json"""
+        """全仓（api/src）只有 src/storage/datastore.py 会打开 cityflow_results.json"""
         offenders = []
         for path in self._iter_py():
             if path.name == "datastore.py" and path.parent.name == "storage":
@@ -193,8 +195,6 @@ class TestConvergence:
             "api/routes/search.py": "from src.storage.datastore import",
             "api/routes/dashboard.py": "from src.storage.datastore import",
             "src/trajectory/builder.py": "from src.storage.datastore import",
-            "frontend/utils.py": "from src.storage.datastore import",
-            "frontend/home.py": "from src.storage.datastore import",
         }
         for rel, marker in checks.items():
             text = (_PROJECT_ROOT / rel).read_text(encoding="utf-8")

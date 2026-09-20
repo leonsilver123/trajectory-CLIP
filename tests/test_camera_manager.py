@@ -103,17 +103,16 @@ class TestGetCamera:
         cam = manager.get_camera("c099")
         assert cam is None
 
-    @pytest.mark.xfail(
-        reason="已知 Bug: cityflow_camera_metadata.yaml 字段名为 'scene' "
-               "而 CameraManager 期望 'scene_id'，导致 scene_id 为 None"
-    )
     def test_camera_scene_id_field(self, manager):
-        """测试摄像头 scene_id 字段是否正确加载"""
+        """测试摄像头 scene_id 字段是否正确加载
+
+        YAML 里字段名是 'scene'，CameraManager 读的是 'scene_id'；
+        `camera_manager.py` 已写成 `cam_data.get("scene_id") or cam_data.get("scene")`
+        兼容两种键名，因此这里应当是**正常通过**的测试，不再是 xfail。
+        """
         cam = manager.get_camera("c001")
-        # 由于 YAML 中字段名为 'scene' 而非 'scene_id'，这里可能为 None
         assert cam.scene_id == "S01", (
-            f"scene_id 应为 'S01' 但得到 {cam.scene_id}。"
-            "YAML 字段名 'scene' 与代码期望 'scene_id' 不匹配。"
+            f"scene_id 应为 'S01' 但得到 {cam.scene_id}"
         )
 
 
@@ -124,10 +123,6 @@ class TestGetCamera:
 class TestGetCamerasByScene:
     """get_cameras_by_scene 接口测试"""
 
-    @pytest.mark.xfail(
-        reason="已知 Bug: YAML 字段名 'scene' 与代码 'scene_id' 不匹配，"
-               "导致 get_cameras_by_scene 始终返回空列表"
-    )
     def test_get_cameras_by_scene_s01(self, manager):
         """测试按场景 S01 获取摄像头"""
         cams = manager.get_cameras_by_scene("S01")
@@ -135,7 +130,6 @@ class TestGetCamerasByScene:
         cam_ids = {c.camera_id for c in cams}
         assert cam_ids == {"c001", "c002", "c003", "c004", "c005"}
 
-    @pytest.mark.xfail(reason="同上 scene/scene_id 字段不匹配 bug")
     def test_get_cameras_by_scene_s06(self, manager):
         """测试按场景 S06 获取摄像头"""
         cams = manager.get_cameras_by_scene("S06")
@@ -175,10 +169,17 @@ class TestGetNearbyCameras:
             assert cams[0].camera_id == "c001"
 
     def test_nearby_cameras_small_radius(self, manager):
-        """测试极小半径只返回自身"""
-        cams = manager.get_nearby_cameras(42.526, -90.7236, radius_km=0.001)
-        # 应该只返回 c001（距离为 0）
-        assert len(cams) >= 1
+        """测试极小半径只返回自身
+
+        注意：查询点必须用 c001 的**精确**坐标（42.525678, -90.723601）。
+        早先这里写的是四舍五入后的 42.526，与 c001 实际相距约 35.8 米
+        （Δlat 0.000322° × 111320 m/°），却用 1 米半径去查，
+        于是必然返回空列表 —— 那是测试期望写错，不是 get_nearby_cameras 的 bug。
+        """
+        cams = manager.get_nearby_cameras(42.525678, -90.723601, radius_km=0.001)
+        # c001 与本查询点重合，距离为 0，必须被返回且排在首位
+        assert len(cams) >= 1, f"半径 1m 内应至少含 c001，实际返回 {len(cams)} 个"
+        assert cams[0].camera_id == "c001"
 
     def test_nearby_cameras_large_radius(self, manager):
         """测试大半径返回所有摄像头"""

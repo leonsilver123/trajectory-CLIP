@@ -15,7 +15,9 @@ api.routes.backtrack - 回溯 API
 from __future__ import annotations
 
 import random  # 仅 _generate_fallback_mock() 使用；主回溯路径严禁随机数
+import threading
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -35,8 +37,36 @@ logger = get_logger("api.routes.backtrack")
 
 router = APIRouter()
 
-# 内存存储最近的回溯结果
-_backtrack_results: Dict[str, Dict[str, Any]] = {}
+# 内存存储最近的回溯结果，供 GET /result/{query_id} 取回。
+#
+# 这是一个**纯缓存**：丢了只影响「按 query_id 回看结果」，不影响任何正确性。
+# 因此用 LRU 上限而不是无限增长 —— 每次 /trace 都往里塞一条完整轨迹，
+# 长驻进程下不设上限就是内存泄漏。
+#
+# FastAPI 的同步端点跑在线程池里，多线程会并发读写这个 dict，
+# 所以用 OrderedDict + Lock（单次 move_to_end/get 也必须是原子的）。
+_MAX_BACKTRACK_RESULTS = 500
+_backtrack_results: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+_backtrack_results_lock = threading.Lock()
+
+
+def _store_backtrack_result(query_id: str, result: Dict[str, Any]) -> None:
+    """写入回溯结果，并按 LRU 淘汰超限的旧结果"""
+    with _backtrack_results_lock:
+        _backtrack_results[query_id] = result
+        _backtrack_results.move_to_end(query_id)
+        while len(_backtrack_results) > _MAX_BACKTRACK_RESULTS:
+            evicted, _ = _backtrack_results.popitem(last=False)
+            logger.debug("回溯结果缓存超出上限(%s)，淘汰: %s", _MAX_BACKTRACK_RESULTS, evicted)
+
+
+def _load_backtrack_result(query_id: str) -> Optional[Dict[str, Any]]:
+    """读取回溯结果（命中即标记为最近使用）"""
+    with _backtrack_results_lock:
+        result = _backtrack_results.get(query_id)
+        if result is not None:
+            _backtrack_results.move_to_end(query_id)
+        return result
 
 
 # ============================================================
@@ -144,7 +174,7 @@ def _generate_fallback_mock(instance_id: str) -> Dict[str, Any]:
             "source": "fallback_mock",
         },
     }
-    _backtrack_results[query_id] = result
+    _store_backtrack_result(query_id, result)
     return result
 
 
@@ -240,7 +270,7 @@ async def backtrack_trajectory(request: BacktrackRequest):
             request.max_upstream, request.max_downstream,
         )
         # 缓存供 GET /result/{query_id} 取回（沿用原有行为）
-        _backtrack_results[result["query_id"]] = result
+        _store_backtrack_result(result["query_id"], result)
         logger.info(
             f"回溯成功: instance_id={instance_id}, "
             f"mode={result.get('identity', {}).get('mode')}, "
@@ -276,7 +306,7 @@ async def get_backtrack_result(query_id: str):
 
     根据查询 ID 获取已完成的回溯结果。
     """
-    result = _backtrack_results.get(query_id)
+    result = _load_backtrack_result(query_id)
     if result is None:
         raise HTTPException(status_code=404, detail=f"回溯结果 {query_id} 不存在")
     return result

@@ -939,6 +939,9 @@ class ObservationChainBuilder:
                     estimated_time=estimated_time,
                 ))
         except (NotImplementedError, AttributeError):
+            # 不再静默：原来的 pass/宽松兜底会掩盖"上游方法被改名"这类问题，
+            # exc_info 直接把调用栈写进日志，不依赖每处手写消息。
+            logger.debug("上游方法不可用（未实现或不存在），走宽松兜底", exc_info=True)
             pass
 
         # 如果没有拓扑信息, 基于直线距离估算
@@ -1120,6 +1123,9 @@ class ObservationChainBuilder:
                     if dist is not None:
                         return dist
                 except (NotImplementedError, AttributeError):
+                    # 不再静默：原来的 pass/宽松兜底会掩盖"上游方法被改名"这类问题，
+                    # exc_info 直接把调用栈写进日志，不依赖每处手写消息。
+                    logger.debug("上游方法不可用（未实现或不存在），走宽松兜底", exc_info=True)
                     pass
 
         except Exception:
@@ -1147,6 +1153,9 @@ class ObservationChainBuilder:
                 if d is not None:
                     total += d
             except (NotImplementedError, AttributeError):
+                # 不再静默：原来的 pass/宽松兜底会掩盖"上游方法被改名"这类问题，
+                # exc_info 直接把调用栈写进日志，不依赖每处手写消息。
+                logger.debug("上游方法不可用（未实现或不存在），走宽松兜底", exc_info=True)
                 # 回退: 使用 Haversine
                 d = self._get_camera_distance_direct(path[i], path[i + 1])
                 if d is not None:

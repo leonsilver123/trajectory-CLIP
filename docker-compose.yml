@@ -32,15 +32,20 @@ services:
       - ./logs:/app/logs        # 运行日志（仓库内已存在，日志文件由容器运行时写入）
     environment:
       - CUDA_VISIBLE_DEVICES=0
+      # QDRANT_HOST/PORT 保留仅为将来启用 Qdrant 时不用改；当前没有任何代码读取它们
+      # （在线检索用 FAISS，见文件末尾 qdrant 段的说明）
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - PYTHONPATH=/app
     env_file:
       # 依赖仓库内已存在的 docker/.env；缺失时 compose 会直接报错
       - docker/.env
-    depends_on:
-      qdrant:
-        condition: service_started
+    # 原先这里有 `depends_on: qdrant`。qdrant 服务已注释停用，
+    # 若保留该依赖，`docker compose up` 会因引用了不存在的服务而直接失败。
+    # 将来启用 qdrant 时把这段恢复即可：
+    # depends_on:
+    #   qdrant:
+    #     condition: service_started
     deploy:
       resources:
         reservations:
@@ -58,63 +63,50 @@ services:
       - traffic-net
 
   # ----------------------------------------------------------
-  # 前端服务 (Streamlit)
-  # ----------------------------------------------------------
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-    container_name: traffic-backtrack-frontend
-    ports:
-      - "8501:8501"
-    volumes:
-      # 前端除了调用后端 API，在 API 不可用时还会直接读本地结果文件做兜底：
-      #   frontend/utils.py: _PROJECT_ROOT = Path(__file__).parent.parent (= /app), _OUTPUT_DIR = /app/output
-      #   frontend/home.py:  /app/output/cityflow_results.json
-      # 所以同样必须挂到 /app/output（不是 /output）。
-      - ./data:/app/data
-      - ./output:/app/output
-    environment:
-      - API_BASE_URL=http://backend:8000
-      - QDRANT_URL=http://qdrant:6333
-    env_file:
-      - docker/.env
-    depends_on:
-      - backend
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "3"
-    restart: unless-stopped
-    networks:
-      - traffic-net
+  # 前端服务 —— **不单独起容器**
+  #
+  # 前端已于 2026-09-21 统一为 `webapp/`（React + Vite + antd）。
+  # 它的构建产物 `webapp/dist/` 由 **backend 同源托管**（见 api/main.py::_mount_frontend），
+  # 因此访问 http://<host>:8000/ 即是完整界面，无需第二个容器、也无需 8501 端口。
+  #
+  # 之前的 Streamlit 前端（`frontend/`）及其 Dockerfile.frontend 已下线删除。
+  #
+  # 部署前记得先构建前端产物：
+  #     cd webapp && npm ci && npm run build
+  #
 
   # ----------------------------------------------------------
-  # Qdrant 向量数据库
-  # ----------------------------------------------------------
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: traffic-backtrack-qdrant
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      # 说明：仓库里已存在 docker/qdrant_storage（约 461MB 历史向量数据），
-      # 原先配置指向的 docker_data/qdrant 并不存在，故这里指向已存在的数据目录，
-      # 既复用了已有 collection，也避免新建重复目录。
-      # 若目录不存在，Docker 会自动创建（Linux 上属主为 root，必要时手动 mkdir/chown）。
-      - ./docker/qdrant_storage:/qdrant/storage
-    environment:
-      - QDRANT__SERVICE__GRPC_PORT=6334
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "3"
-    restart: unless-stopped
-    networks:
-      - traffic-net
+  # Qdrant 向量数据库 —— **当前未接线，默认不启动**
+  #
+  # 状态（PLAN3-F4，2026-09-20 实测）：项目里**没有任何消费者**。
+  #   - 在线检索走的是 FAISS：output/clip_vectors.faiss（IndexFlatIP，68,349×512）
+  #   - src/retrieval/vector_recall.py 有 Qdrant 实现，但该包不在在线路径上
+  #     （原先接线的 api/dependencies.py 是未使用的骨架，已于 2026-09-21 删除）
+  #   - configs/default.yaml 的 retrieval.qdrant.enabled 已标为 false
+  #
+  # 保留这段配置是为了将来真要启用时不必重写；但它此前会白起一个容器、
+  # 占 6333/6334 端口、挂载 461MB 历史数据目录，并且让人误以为向量库是 Qdrant。
+  # 启用步骤：取消下面注释 → 把 retrieval.vector_db 改回 qdrant →
+  #          让检索路由改用 src/retrieval/vector_recall.py。
+  #
+  # qdrant:
+  #   image: qdrant/qdrant:latest
+  #   container_name: traffic-backtrack-qdrant
+  #   ports:
+  #     - "6333:6333"
+  #     - "6334:6334"
+  #   volumes:
+  #     - ./docker/qdrant_storage:/qdrant/storage
+  #   environment:
+  #     - QDRANT__SERVICE__GRPC_PORT=6334
+  #   logging:
+  #     driver: json-file
+  #     options:
+  #       max-size: "20m"
+  #       max-file: "3"
+  #   restart: unless-stopped
+  #   networks:
+  #     - traffic-net
 
 # ----------------------------------------------------------
 # 网络

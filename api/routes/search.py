@@ -35,7 +35,14 @@ router = APIRouter()
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _OUTPUT_DIR = _PROJECT_ROOT / "output"
 _CLIP_INDEX_FILE = _OUTPUT_DIR / "clip_vectors.faiss"
-_TRACK_CLIP_INDEX_FILE = _OUTPUT_DIR / "track_clip_vectors.faiss"
+# 注意：output/track_clip_vectors.faiss（370×512）是**陈旧产物**，在线路径不使用。
+# 它对应的 track 级加载函数已于 2026-09-20 移除（PLAN3-B4）：
+#   - 那两个函数（_load_track_clip_index / _get_track_clip_index）全仓零调用者；
+#   - 且该索引只有 370 行，而当前轨迹级向量（output/reid/track_reid_vectors.npy）是 926 行，
+#     即它连自己的数据规模都对不上了；
+#   - 在线检索的 track 级去重是在 _build_candidates_with_clip 里按 detection 命中聚合完成的，
+#     不需要 track 级索引。
+# 该文件可安全删除；保留它不影响任何行为。
 _CAMERA_METADATA_PATH = _PROJECT_ROOT / "configs" / "cityflow_camera_metadata.yaml"
 
 # 加载摄像头名称映射
@@ -86,16 +93,10 @@ def _load_clip_index() -> Optional[Any]:
     return _get_clip_index()
 
 
-def _load_track_clip_index() -> Optional[Any]:
-    """加载Track-level CLIP FAISS索引（带缓存）"""
-    return _get_track_clip_index()
-
-
 # --------------- CLIP 模型 & FAISS 索引缓存 ---------------
 _CLIP_MODEL = None
 _CLIP_PREPROCESS = None
 _CLIP_INDEX = None
-_TRACK_CLIP_INDEX = None
 
 
 def _load_clip_model():
@@ -156,23 +157,6 @@ def _get_clip_index():
         return _CLIP_INDEX
     except Exception as e:
         logger.warning(f"加载 CLIP 索引失败: {e}")
-        return None
-
-
-def _get_track_clip_index():
-    """获取 Track-level FAISS 索引（缓存）"""
-    global _TRACK_CLIP_INDEX
-    if _TRACK_CLIP_INDEX is not None:
-        return _TRACK_CLIP_INDEX
-    if not _TRACK_CLIP_INDEX_FILE.exists():
-        return None
-    try:
-        import faiss
-        _TRACK_CLIP_INDEX = faiss.read_index(str(_TRACK_CLIP_INDEX_FILE))
-        logger.info(f"加载 Track CLIP 索引: {_TRACK_CLIP_INDEX.ntotal} 个向量")
-        return _TRACK_CLIP_INDEX
-    except Exception as e:
-        logger.warning(f"加载 Track CLIP 索引失败: {e}")
         return None
 
 

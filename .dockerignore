@@ -34,6 +34,16 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .tmp-render/
+.tmp-probe/
+.tmp-interview/
+
+# --- 前端依赖（数百 MB）---
+# webapp/dist 是**要**带进镜像的（后端同源托管它），所以只排除依赖与源码无关物。
+# node_modules 若不排除，`COPY . .` 会把整个依赖树塞进构建上下文。
+node_modules/
+
+# --- 第三方源码树（脚本按需 clone，不必进镜像）---
+third_party/
 
 # --- 版本控制与编辑器 ---
 .git/
@@ -44,6 +54,3 @@ __pycache__/
 # --- 运行日志 ---
 logs/
 *.log
-
-# --- 与运行无关的大体积文档（公安部监测服务平台操作手册.pdf，24MB）---
-*.pdf

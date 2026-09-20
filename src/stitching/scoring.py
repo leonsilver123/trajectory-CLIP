@@ -7,8 +7,27 @@ src.stitching.scoring - 跨镜连接评分模块
               + w4*时间可达性 + w5*空间可达性 + w6*方向一致性
               - p1*路径分叉惩罚 - p2*观测缺失惩罚
 
-车辆侧权重: 车牌(0.35) > 时间(0.25) > 拓扑(0.15) > ReID(0.15) > 属性(0.10)
+车辆侧权重: 车牌(0.35) > 时间(0.40) > 拓扑(0.15) > ReID(0.00) = 属性(0.00)
 行人侧权重: 时间(0.35) > ReID(0.30) > 属性(0.25) > 背包(0.10)
+
+车辆侧 ReID 与属性的软评分权重为 **0**，这不是遗漏（P-A 网格搜索实测）：
+跨镜外观连续相似度的可分性很弱（d-prime 仅 0.78）、属性跨镜一致率仅 28–37%，
+两者按权重加进加权和只会给所有候选加上同一份噪声、压缩区分度。
+它们改由 `candidate_edge.py` 的硬门控承担（规则 7 属性门控、规则 8 外观门控，
+阈值 `stitching.min_appearance_score`，默认 0.95 → 精度 0.97）。
+**同一个弱信号，放进加权和是噪声，放进阈值是过滤器。**
+
+⚠️ **本数据集上的实际生效权重（实测 `explain_dimensions()`）**
+五维配置权重之和是 0.90，余下 0.10 由方向加分项补齐（总分上限 1.00）。
+但 `plate` 这一维在本数据集上**恒为无证据** —— 实测 68,349 条检测中
+带 `plate_number` 的为 **0 条**，因此它每次都被整维剔除。结果是：
+
+    配置权重: plate 0.35 / temporal 0.40 / topology 0.15 / reid 0.0 / attribute 0.0
+    生效权重: temporal 0.6545 / topology 0.2455          （plate 被剔除）
+
+即"六维评分函数"在当前数据上**实际退化为「时间可达性 + 路网拓扑 + 方向」三项**。
+这不是缺陷，而是缺失维度重分摊正常工作；但读这段代码时必须知道它，
+否则会以为车牌一致性真的在参与打分。
 
 **权重唯一来源是 `configs/default.yaml` 的 `stitching.weights`**（T6）：
 不传 `vehicle_weights` / `pedestrian_weights` 时本模块自动从配置读取；只在
@@ -723,6 +742,9 @@ class CrossCameraScorer:
                 source.camera_id, target.camera_id
             )
         except (NotImplementedError, AttributeError):
+            # 不再静默：原来的 pass/宽松兜底会掩盖"上游方法被改名"这类问题，
+            # exc_info 直接把调用栈写进日志，不依赖每处手写消息。
+            logger.debug("上游方法不可用（未实现或不存在），走宽松兜底", exc_info=True)
             # 如果拓扑未实现, 给一个宽松默认值
             reachable = True
 
@@ -978,6 +1000,9 @@ class CrossCameraScorer:
             if dist is not None and dist > 0:
                 return dist
         except (NotImplementedError, AttributeError):
+            # 不再静默：原来的 pass/宽松兜底会掩盖"上游方法被改名"这类问题，
+            # exc_info 直接把调用栈写进日志，不依赖每处手写消息。
+            logger.debug("上游方法不可用（未实现或不存在），走宽松兜底", exc_info=True)
             pass
 
         # 回退: 从 CameraManager 获取直线距离
@@ -991,6 +1016,9 @@ class CrossCameraScorer:
                 if dist is not None and dist > 0:
                     return dist
         except (NotImplementedError, AttributeError):
+            # 不再静默：原来的 pass/宽松兜底会掩盖"上游方法被改名"这类问题，
+            # exc_info 直接把调用栈写进日志，不依赖每处手写消息。
+            logger.debug("上游方法不可用（未实现或不存在），走宽松兜底", exc_info=True)
             pass
 
         return None
@@ -1052,6 +1080,9 @@ class CrossCameraScorer:
             if path is not None and len(path) > 2:
                 return len(path) - 2  # 去掉起点和终点
         except (NotImplementedError, AttributeError):
+            # 不再静默：原来的 pass/宽松兜底会掩盖"上游方法被改名"这类问题，
+            # exc_info 直接把调用栈写进日志，不依赖每处手写消息。
+            logger.debug("上游方法不可用（未实现或不存在），走宽松兜底", exc_info=True)
             pass
         return 0
 

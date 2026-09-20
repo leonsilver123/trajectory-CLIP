@@ -34,6 +34,19 @@ logger = get_logger("api.main")
 # 前端构建产物目录（webapp/dist，由 `npm run build` 生成）
 _WEBAPP_DIST = Path(__file__).resolve().parent.parent / "webapp" / "dist"
 
+# 允许经 /static 对外提供的 output/ 子目录（**只放图片**）。
+# 新增目录必须显式登记 —— 默认不可达，避免数据文件被整包下载。
+# 依据：datastore 中 68,349 条检测的 crop_path/image_path/keyframe_path
+# 分别指向 aicity22_crops / aicity22_frames / cityflow_crops。
+_STATIC_IMAGE_DIRS = (
+    "aicity22_crops",     # 检测裁剪图（crop_path，68,349 张）
+    "aicity22_frames",    # 原始抽帧图（image_path）
+    "cityflow_crops",     # 关键帧图（keyframe_path，949 张）
+    "crops",              # 早期裁剪图目录
+    "demo_detections",    # quick_demo 产物
+    "pipeline_test",      # 管线验证产物
+)
+
 
 def _mount_frontend(app: FastAPI) -> None:
     """
@@ -123,23 +136,42 @@ def create_app() -> FastAPI:
     from api.routes.confirm import router as confirm_router
     from api.routes.backtrack import router as backtrack_router
     from api.routes.dashboard import router as dashboard_router
+    from api.routes.report import router as report_router
 
     app.include_router(search_router, prefix="/api/v1/search", tags=["检索"])
     app.include_router(confirm_router, prefix="/api/v1/confirm", tags=["确认"])
     app.include_router(backtrack_router, prefix="/api/v1/backtrack", tags=["回溯"])
     app.include_router(dashboard_router, prefix="/api/v1/dashboard", tags=["仪表盘"])
+    app.include_router(report_router, prefix="/api/v1/report", tags=["研判报告"])
 
     @app.get("/health")
     async def health_check():
         """健康检查接口"""
         return {"status": "ok", "version": config.get("system.version", "1.0.0")}
 
-    # 静态文件服务：将 output/ 目录映射到 /static 路径
-    # 前端可通过 /static/crops/xxx.jpg 访问真实检测图片
+    # 静态图片服务：**只挂白名单里的图片目录**，而不是整个 output/。
+    #
+    # 早先这里把整个 output/ 挂到 /static，于是 output/cityflow_results.json（75MB 全量数据）、
+    # output/datastore/*.parquet、meta.sqlite、各类调试 .log 全部可经 HTTP 直接下载。
+    # 前端真正需要的只是检测裁剪图，所以改成逐目录白名单 —— 新增目录必须显式登记，
+    # 默认不可达。
+    #
+    # 白名单是**从数据反推**出来的（见 PLAN3-E1）：datastore 里 68,349 条检测的
+    #   crop_path -> aicity22_crops/     image_path -> aicity22_frames/
+    #   keyframe_path -> cityflow_crops/
     output_dir = Path(__file__).resolve().parent.parent / "output"
     if output_dir.exists():
-        app.mount("/static", StaticFiles(directory=str(output_dir)), name="static")
-        logger.info(f"静态文件服务已挂载: /static -> {output_dir}")
+        mounted = []
+        for name in _STATIC_IMAGE_DIRS:
+            sub = output_dir / name
+            if sub.is_dir():
+                app.mount(
+                    f"/static/{name}",
+                    StaticFiles(directory=str(sub)),
+                    name=f"static-{name}",
+                )
+                mounted.append(name)
+        logger.info(f"静态图片服务已挂载: /static/{{{','.join(mounted)}}} -> {output_dir}")
 
     # 前端托管放在最后：API 路由优先，未命中的路径才落到 SPA 兜底
     _mount_frontend(app)

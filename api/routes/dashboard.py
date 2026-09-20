@@ -228,6 +228,116 @@ async def list_cameras() -> Dict[str, Any]:
     return {"cameras": cameras}
 
 
+# ============================================================
+# 待办事项与活动流
+#
+# 这两个面板原先在前端是**硬编码的编造数据**（写死的 23/8/5/12 条待办，
+# 以及 7 条凭空捏造的"最近活动"，时间戳用 now()-timedelta 现算所以看着总很新鲜）。
+#
+# 但这两件事其实**都能从真实数据推导**，不需要编：
+#   - 待办 = 会话状态机里的会话状态（searched 就是"检索了还没确认"）
+#   - 活动流 = 最近的会话状态变更（谁在什么时候检索/确认/回溯了什么）
+# 因此这里把它们做成真实接口，前端不再自己编。
+#
+# 仍然**没有**数据来源的项（摄像头在线状态、异常车辆、待审核轨迹），
+# 一律不返回，而不是回填一个看起来合理的数字。
+# ============================================================
+
+
+@router.get("/todos")
+async def get_todos() -> Dict[str, Any]:
+    """
+    待办事项统计（全部来自后端会话状态机，无编造）
+
+    Returns:
+        pending_confirm: 处于 searched 的会话数（检索完成但尚未确认目标）
+        confirmed / backtracked / excluded / suspect: 各状态的会话数
+        low_confidence: 置信度低于阈值的检测数（来自 datastore 实测）
+        unavailable: 数据集中**没有**对应事实的项，前端应显示为"—"而非 0
+    """
+    from src.common.session_store import ALL_STATES, get_session_store
+
+    store = get_session_store()
+    sessions = store.list_all()
+
+    by_state: Dict[str, int] = {s: 0 for s in ALL_STATES}
+    for sess in sessions:
+        state = sess.get("state")
+        if state in by_state:
+            by_state[state] += 1
+
+    # 低置信检测数：真实扫描 datastore（不采样、不估算）
+    threshold = float(get_config().get("quality.min_score", 0.3))
+    detections = _load_results().get("detections", [])
+    low_confidence = sum(
+        1 for d in detections
+        if isinstance(d.get("confidence"), (int, float)) and d["confidence"] < threshold
+    )
+
+    return {
+        # 「待确认目标」= 检索完成但状态仍停在 searched 的会话
+        "pending_confirm": by_state.get("searched", 0),
+        "confirmed": by_state.get("confirmed", 0),
+        "backtracked": by_state.get("backtracked", 0),
+        "excluded": by_state.get("excluded", 0),
+        "suspect": by_state.get("suspect", 0),
+        "low_confidence": low_confidence,
+        "session_total": len(sessions),
+        "low_confidence_threshold": threshold,
+        # 没有事实来源的项：显式列出，前端不得回填
+        "unavailable": ["offline_cameras", "abnormal_vehicles", "pending_review"],
+    }
+
+
+@router.get("/activities")
+async def get_activities(limit: int = 10) -> Dict[str, Any]:
+    """
+    最近活动（来自后端会话状态机的真实变更记录，无编造）
+
+    Args:
+        limit: 最多返回多少条
+
+    Returns:
+        activities: 按 updated_at 倒序的会话变更，含 时间/类型/摘要/状态
+    """
+    from src.common.session_store import get_session_store
+
+    sessions = get_session_store().list_all()
+    # updated_at 是本地时间字符串（isoformat），可直接字典序排序
+    ordered = sorted(
+        sessions,
+        key=lambda s: s.get("updated_at") or s.get("created_at") or "",
+        reverse=True,
+    )[: max(1, min(limit, 100))]
+
+    _STATE_LABEL = {
+        "searched": "检索",
+        "confirmed": "确认",
+        "backtracked": "回溯",
+        "excluded": "排除",
+        "suspect": "存疑",
+        "idle": "空闲",
+    }
+
+    activities = []
+    for sess in ordered:
+        updated = sess.get("updated_at") or ""
+        activities.append({
+            "time": updated[11:16] if len(updated) >= 16 else "",   # 取 HH:MM
+            "timestamp": updated,
+            "type": _STATE_LABEL.get(sess.get("state"), sess.get("state") or ""),
+            "summary": (
+                f"{sess.get('query_text') or '(无查询词)'} — "
+                f"候选 {sess.get('candidate_count', 0)} 条"
+            ),
+            "query_id": sess.get("query_id"),
+            "state": sess.get("state"),
+            "action": "查看",
+        })
+
+    return {"activities": activities, "total_sessions": len(sessions)}
+
+
 @router.get("/health")
 async def health_status() -> Dict[str, Any]:
     """

@@ -24,8 +24,25 @@ from __future__ import annotations
 
 import copy
 import threading
+from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+from src.common.logger import get_logger
+
+logger = get_logger("common.session_store")
+
+# ============================================================
+# 容量上限（防止长驻进程内存无限增长）
+# ============================================================
+
+# 每次 /search/query 或 /search/plate 都会 create 一条会话，
+# 而会话一旦创建就再也不会被删除 —— 长驻服务下这是必然的内存泄漏。
+# 这里给一个 LRU 上限：超限时淘汰**最久未被访问**的会话。
+#
+# 淘汰是可接受的语义：被淘汰的 query_id 后续访问会得到 404（SessionNotFoundError），
+# 前端已能处理；而"永不淘汰"才是真正危险的 —— 它会让进程慢慢地吃掉所有内存。
+DEFAULT_MAX_SESSIONS = 1000
 
 # ============================================================
 # 状态常量
@@ -78,9 +95,45 @@ class SessionStore:
     每次检索创建一条会话，后续的确认/回溯都通过 query_id 更新同一条会话。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_sessions: Optional[int] = None) -> None:
+        """
+        Args:
+            max_sessions: 会话数上限。None 时读配置 `session.max_sessions`，
+                读不到则退回 `DEFAULT_MAX_SESSIONS`。传 0 或负数表示不限制
+                （仅用于测试对照，生产不应这么配）。
+        """
         self._lock = threading.Lock()
-        self._sessions: Dict[str, Dict[str, Any]] = {}
+        # OrderedDict 提供 O(1) 的 LRU：最近访问的移到末尾，淘汰从头部取
+        self._sessions: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        self.max_sessions = (
+            max_sessions if max_sessions is not None else self._max_sessions_from_config()
+        )
+        self.evicted_count = 0
+
+    @staticmethod
+    def _max_sessions_from_config() -> int:
+        """从配置读取上限；任何异常都退回默认值（会话存储不应因配置缺失而起不来）"""
+        try:
+            from src.common.config import get_config
+
+            value = get_config().get("session.max_sessions", DEFAULT_MAX_SESSIONS)
+            return int(value)
+        except Exception:
+            return DEFAULT_MAX_SESSIONS
+
+    def _evict_locked(self) -> None:
+        """
+        超限时淘汰最久未访问的会话（调用方必须持锁）
+
+        只在 create 时触发：淘汰发生在"业务上正在新增"的时刻，
+        不会在一次读取中途把别的会话抽走。
+        """
+        if not self.max_sessions or self.max_sessions <= 0:
+            return
+        while len(self._sessions) > self.max_sessions:
+            query_id, _ = self._sessions.popitem(last=False)
+            self.evicted_count += 1
+            logger.debug("会话超出上限(%s)，淘汰最久未访问: %s", self.max_sessions, query_id)
 
     # ---------------- 内部工具 ----------------
 
@@ -90,10 +143,15 @@ class SessionStore:
         return datetime.now().isoformat(timespec="seconds")
 
     def _require_locked(self, query_id: str) -> Dict[str, Any]:
-        """持锁状态下取会话，不存在则抛 SessionNotFoundError"""
+        """持锁状态下取会话，不存在则抛 SessionNotFoundError
+
+        取到即标记为最近访问 —— 状态转移（确认/回溯/排除）都走这里，
+        正在流转的会话必须比闲置会话更难被淘汰。
+        """
         session = self._sessions.get(query_id)
         if session is None:
             raise SessionNotFoundError(query_id)
+        self._sessions.move_to_end(query_id)
         return session
 
     def _transition(self, query_id: str, to_state: str, **fields: Any) -> Dict[str, Any]:
@@ -139,7 +197,7 @@ class SessionStore:
             target_type: 目标类别过滤条件（可选）
 
         Returns:
-            会话副本；query_id 已存在时覆盖旧会话
+            会话副本；query_id 已存在时覆盖旧会话，并按 LRU 淘汰超限的历史会话
         """
         now = self._now()
         session: Dict[str, Any] = {
@@ -158,6 +216,8 @@ class SessionStore:
         }
         with self._lock:
             self._sessions[query_id] = session
+            self._sessions.move_to_end(query_id)   # 覆盖已有键时也要标记为最近使用
+            self._evict_locked()
             return copy.deepcopy(session)
 
     def get(self, query_id: str) -> Optional[Dict[str, Any]]:
@@ -172,6 +232,8 @@ class SessionStore:
         """
         with self._lock:
             session = self._sessions.get(query_id)
+            if session is not None:
+                self._sessions.move_to_end(query_id)   # 读也算访问，避免活跃会话被淘汰
             return copy.deepcopy(session) if session is not None else None
 
     def require(self, query_id: str) -> Dict[str, Any]:

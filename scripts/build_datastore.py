@@ -4,8 +4,9 @@ scripts.build_datastore - 把 cityflow_results.json 落成 datastore（离线一
 产物（默认写在 output/datastore/）:
     detections.parquet      检测表（一列一字段；嵌套字段以 JSON 文本存储）
     tracks.parquet          轨迹表
-    det_image_vectors.npy   内联 768 维图像向量（从检测里抽出来单独存，占 JSON 体积近三成）
-    det_text_vectors.npy    内联 768 维文本向量
+    det_image_vectors.npy   内联图像向量（从检测里抽出来单独存，占 JSON 体积近三成）
+                            已统一为 512 维，与在线检索的 FAISS 索引一致
+    det_text_vectors.npy    内联文本向量（仍为 768 维；未参与在线检索，见 PLAN3-B3）
     *_rows.npy              上述向量对应的检测行号
     meta.sqlite             元数据：schema 版本、源文件指纹、统计、summary、列格式自描述
 

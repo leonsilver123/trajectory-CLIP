@@ -414,6 +414,9 @@ class CandidateEdgeGenerator:
         try:
             return topology.is_reachable(src_camera_id, tgt_camera_id)
         except (NotImplementedError, AttributeError):
+            # 不再静默：原来的 pass/宽松兜底会掩盖"上游方法被改名"这类问题，
+            # exc_info 直接把调用栈写进日志，不依赖每处手写消息。
+            logger.debug("上游方法不可用（未实现或不存在），走宽松兜底", exc_info=True)
             pass
 
         # 回退到 CameraManager 的 BFS
@@ -422,6 +425,9 @@ class CandidateEdgeGenerator:
                 src_camera_id, tgt_camera_id
             )
         except (NotImplementedError, AttributeError):
+            # 不再静默：原来的 pass/宽松兜底会掩盖"上游方法被改名"这类问题，
+            # exc_info 直接把调用栈写进日志，不依赖每处手写消息。
+            logger.debug("上游方法不可用（未实现或不存在），走宽松兜底", exc_info=True)
             # 如果都未实现, 默认认为可达 (宽松策略)
             return True
 
@@ -650,6 +656,9 @@ class CandidateEdgeGenerator:
             if dist is not None and dist > 0:
                 return dist
         except (NotImplementedError, AttributeError):
+            # 不再静默：原来的 pass/宽松兜底会掩盖"上游方法被改名"这类问题，
+            # exc_info 直接把调用栈写进日志，不依赖每处手写消息。
+            logger.debug("上游方法不可用（未实现或不存在），走宽松兜底", exc_info=True)
             pass
 
         # 回退: CameraManager 直线距离
@@ -668,6 +677,9 @@ class CandidateEdgeGenerator:
                 if dist is not None and dist > 0:
                     return dist
         except (NotImplementedError, AttributeError):
+            # 不再静默：原来的 pass/宽松兜底会掩盖"上游方法被改名"这类问题，
+            # exc_info 直接把调用栈写进日志，不依赖每处手写消息。
+            logger.debug("上游方法不可用（未实现或不存在），走宽松兜底", exc_info=True)
             pass
 
         return None

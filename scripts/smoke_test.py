@@ -2,14 +2,14 @@
 scripts.smoke_test - 前后端冒烟测试
 
 在 API 服务已启动的前提下，按「检索 → 确认 → 回溯」的真实闭环打一遍接口，
-并对前端模块做可导入性检查。逐项打印通过/失败，最后给出汇总。
+并检查前端（webapp）构建产物与同源托管。逐项打印通过/失败，最后给出汇总。
 
 启动服务（另开一个终端）:
     PYTHONPATH="H:/trajectory-CLIP/.venv/Lib/site-packages" \\
         .venv/Scripts/python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 
 运行本脚本:
-    .venv/Scripts/python.exe scripts/smoke_test.py [--base-url http://127.0.0.1:8000] [--frontend]
+    .venv/Scripts/python.exe scripts/smoke_test.py [--base-url http://127.0.0.1:8000]
 
 注意：**不要**给服务加 `PYTHONNOUSERSITE=1`。`cn_clip` 只安装在用户级
 site-packages 里，加了这个变量会让 CLIP 检索静默退化成纯属性排序
@@ -164,108 +164,42 @@ def test_dashboard(base: str) -> None:
         _record(f"GET {path}", code == 200, f"status={code} body={str(body)[:120]}")
 
 
-def test_frontend_imports() -> None:
-    """前端模块可导入性检查（不启动 Streamlit，只验证 import 不炸）"""
-    print("\n[8] 前端模块导入检查")
-    mods = ["frontend.utils"]
-    for m in mods:
-        try:
-            __import__(m)
-            _record(f"import {m}", True, "")
-        except Exception as e:
-            _record(f"import {m}", False, f"{e.__class__.__name__}: {e}")
+def test_webapp_artifacts(base: str) -> None:
+    """前端（webapp/）产物与同源托管检查
 
-    # frontend/app.py 是 Streamlit 入口，import 它需要 streamlit 运行时；
-    # 这里只做语法编译检查，确保没有语法错误。
-    for rel in ("frontend/app.py", "frontend/utils.py"):
-        p = _PROJECT_ROOT / rel
-        try:
-            compile(p.read_text(encoding="utf-8"), str(p), "exec")
-            _record(f"compile {rel}", True, "")
-        except Exception as e:
-            _record(f"compile {rel}", False, f"{e.__class__.__name__}: {e}")
-
-
-def test_frontend_runtime(port: int = 8501) -> None:
-    """真实拉起 Streamlit 前端并探活（不是只做 import/compile 检查）。
-
-    以子进程方式启动 frontend/app.py，轮询 Streamlit 自带健康端点 /_stcore/health，
-    无论成败都会回收子进程。
+    前端已于 2026-09-21 统一为 `webapp/`（React + Vite），由后端同源托管；
+    原先的 Streamlit 前端（`frontend/`）已下线，因此这里不再做 Python 模块
+    导入/compile 检查，改为检查**构建产物**与**后端是否真的在托管它**。
     """
-    import os
-    import subprocess
-    import time
+    print("\n[8] 前端（webapp）产物与托管检查")
 
-    print(f"\n[9] 前端运行时  streamlit run frontend/app.py (:{port})")
-    app_path = _PROJECT_ROOT / "frontend" / "app.py"
-    if not app_path.exists():
-        _record("streamlit 启动", False, f"入口不存在: {app_path}")
+    src_dir = _PROJECT_ROOT / "webapp" / "src"
+    _record("webapp/src 存在", src_dir.is_dir(), str(src_dir) if src_dir.is_dir() else "缺失")
+
+    index = _PROJECT_ROOT / "webapp" / "dist" / "index.html"
+    if not index.exists():
+        # 未构建不算失败：后端会跳过托管、仅提供 API（向后兼容行为）
+        _record(
+            "webapp/dist 已构建", True,
+            "未构建（可选）—— 需要 UI 时在 webapp/ 下执行 npm run build",
+        )
         return
+    _record("webapp/dist 已构建", True, f"{index.stat().st_size} bytes")
 
-    # 子进程不会自动继承"规范调用方式"，必须显式把 venv 的 site-packages 前置到
-    # PYTHONPATH：否则 typing_extensions 会解析到 conda env 里那个缺 sentinel 的
-    # 残缺副本，anyio/starlette 导入失败，streamlit 直接起不来（现象是健康检查一直不 200）。
-    # 这里自行构造，保证本脚本无论被怎样调用都能正确拉起前端。
-    child_env = dict(os.environ)
-    venv_site = str(_PROJECT_ROOT / ".venv" / "Lib" / "site-packages")
-    existing = child_env.get("PYTHONPATH", "")
-    child_env["PYTHONPATH"] = venv_site + (os.pathsep + existing if existing else "")
-
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "streamlit", "run", str(app_path),
-         "--server.port", str(port), "--server.headless=true",
-         "--server.address", "127.0.0.1"],
-        cwd=str(_PROJECT_ROOT), env=child_env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
-    healthy = False
-    detail = ""
+    # 后端应把 dist 挂到根路径
     try:
-        deadline = time.time() + 120
-        while time.time() < deadline:
-            if proc.poll() is not None:
-                detail = f"进程提前退出 (code={proc.returncode})"
-                break
-            try:
-                r = requests.get(f"http://127.0.0.1:{port}/_stcore/health", timeout=5)
-                if r.status_code == 200:
-                    healthy = True
-                    detail = f"/_stcore/health -> 200 {r.text.strip()[:40]}"
-                    break
-            except Exception:
-                pass
-            time.sleep(3)
-        else:
-            detail = "120 秒内未就绪"
-    finally:
-        try:
-            proc.terminate()
-            proc.wait(timeout=20)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-        # 失败时把子进程输出带出来，否则只剩一句"未就绪"，无法定位原因
-        if not healthy and proc.stdout is not None:
-            try:
-                tail = proc.stdout.read() or ""
-                last = [ln for ln in tail.strip().splitlines() if ln.strip()][-6:]
-                if last:
-                    detail += " | 子进程输出尾部: " + " ⏎ ".join(last)
-            except Exception:
-                pass
-
-    _record("streamlit 启动并响应健康检查", healthy, detail)
+        r = requests.get(f"{base}/", timeout=10)
+        ok = r.status_code == 200 and "<div id=\"root\"" in r.text
+        _record("后端同源托管前端 (GET /)", ok,
+                f"status={r.status_code} 含 root 挂载点={('<div id=\"root\"' in r.text)}")
+    except Exception as e:
+        _record("后端同源托管前端 (GET /)", False, f"{e.__class__.__name__}: {e}")
 
 
 def main() -> int:
     """入口：跑全部冒烟项并打印汇总"""
     parser = argparse.ArgumentParser(description="前后端冒烟测试")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--frontend", action="store_true",
-                        help="额外真实拉起 Streamlit 前端做运行时探活（较慢）")
-    parser.add_argument("--frontend-port", type=int, default=8501)
     args = parser.parse_args()
     base = args.base_url.rstrip("/")
 
@@ -291,9 +225,7 @@ def main() -> int:
     test_backtrack_trajectory(base, instance_id)
     test_backtrack_trace(base, instance_id)
     test_dashboard(base)
-    test_frontend_imports()
-    if args.frontend:
-        test_frontend_runtime(args.frontend_port)
+    test_webapp_artifacts(base)
 
     passed = sum(1 for _, ok, _ in _RESULTS if ok)
     failed = [(n, d) for n, ok, d in _RESULTS if not ok]
