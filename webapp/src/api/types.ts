@@ -8,7 +8,8 @@
  */
 
 /** 依据类型：强身份匹配 vs 概率推断 */
-export type Basis = 'strong_identity' | 'probabilistic_inference' | (string & {});
+export type Basis =
+  "strong_identity" | "probabilistic_inference" | (string & {});
 
 /** 检索候选（POST /api/v1/search/query 的 candidates[] 元素）
  *
@@ -16,7 +17,7 @@ export type Basis = 'strong_identity' | 'probabilistic_inference' | (string & {}
  * clip_score / final_score 等），因此这里除 instance_id 外的字段全部可选。
  */
 export interface Candidate {
-  instance_id: string;              // 唯一标识（= target_id），回溯的入参
+  instance_id: string; // 唯一标识（= target_id），回溯的入参
   track_id?: string | null;
   camera_id?: string | null;
   camera_name?: string | null;
@@ -30,9 +31,9 @@ export interface Candidate {
   text_score?: number | null;
   attribute_match_score?: number | null;
   combined_score?: number | null;
-  final_score?: number | null;      // 排序主分（/plate 不返回）
+  final_score?: number | null; // 排序主分（/plate 不返回）
   rank?: number | null;
-  keyframe_path?: string | null;    // 相对 output/ 的路径，可能带 output\ 前缀与反斜杠
+  keyframe_path?: string | null; // 相对 output/ 的路径，可能带 output\ 前缀与反斜杠
   detection_bbox?: number[] | null;
   has_trajectory?: boolean | null;
   trajectory_frame_range?: unknown;
@@ -52,6 +53,18 @@ export interface TrackFrame {
   timestamp?: string | null;
   bbox?: number[] | null;
   confidence?: number | null;
+  /** 归一化包围盒 [cx/W, cy/H, w/W, h/H]，用于在画面内定位（PLAN4-T1） */
+  bbox_norm?: number[] | null;
+  /** 全局时间（跨摄像头可比；本机时间各摄像头独立起跳，不可直接相减） */
+  global_timestamp?: string | null;
+  /** 画面尺寸 [宽, 高]，由检测框范围推断的下界 */
+  frame_size?: number[] | null;
+  /**
+   * 画面尺寸的来源。
+   * - `inferred_from_detections`：由检测框最大范围推断，是**下界**，UI 应标注"比例未知"
+   * - `unavailable`：拿不到，相关字段一律为 null
+   */
+  frame_size_source?: "inferred_from_detections" | "unavailable" | null;
 }
 
 /** 检索响应 */
@@ -74,13 +87,13 @@ export interface ObservationNode {
   camera_id: string;
   camera_name?: string | null;
   tracklet_id?: string | null;
-  timestamp?: string | null;        // 该摄像头本地时间
+  timestamp?: string | null; // 该摄像头本地时间
   global_timestamp?: string | null; // 跨镜全局对齐后的时间（T5），实测存在
   time_offset_seconds?: number | null; // 本地时间相对全局的偏移，实测存在
   latitude?: number | null;
   longitude?: number | null;
-  keyframe_path?: string | null;    // 实测恒为 null：回溯节点不带关键帧，候选才带
-  confidence?: number | null;       // 可能为 null
+  keyframe_path?: string | null; // 实测恒为 null：回溯节点不带关键帧，候选才带
+  confidence?: number | null; // 可能为 null
   basis?: Basis | null;
   basis_text?: string | null;
 }
@@ -90,8 +103,8 @@ export interface ObservationSegment {
   tracklet_id?: string | null;
   camera_id: string;
   camera_name?: string | null;
-  start_time?: string | null;       // "HH:MM:SS"（注意：不含日期）
-  end_time?: string | null;         // "HH:MM:SS"
+  start_time?: string | null; // "HH:MM:SS"（注意：不含日期）
+  end_time?: string | null; // "HH:MM:SS"
   direction?: string | null;
   // 实测为空串 ""（非 null）：表示后端未做出入口描述，UI 按缺失渲染
   entry_description?: string | null;
@@ -111,13 +124,13 @@ export interface InferenceSegment {
   target_latitude?: number | null;
   target_longitude?: number | null;
   confidence?: number | null;
-  estimated_travel_time?: number | null;   // 由路网距离推算，实测有值（如 5.5）
-  actual_travel_time?: number | null;      // 实测为 null
+  estimated_travel_time?: number | null; // 由路网距离推算，实测有值（如 5.5）
+  actual_travel_time?: number | null; // 实测为 null
   // 以下为实测存在但前端暂未展示的字段：
   source_tracklet_id?: string | null;
   target_tracklet_id?: string | null;
-  local_travel_time?: number | null;       // 未做全局对齐的本地时间差，实测可能为负
-  time_aligned?: boolean | null;           // 两侧观测是否已完成全局时间对齐
+  local_travel_time?: number | null; // 未做全局对齐的本地时间差，实测可能为负
+  time_aligned?: boolean | null; // 两侧观测是否已完成全局时间对齐
   source_time_offset_seconds?: number | null;
   target_time_offset_seconds?: number | null;
   route_description?: string | null;
@@ -187,7 +200,7 @@ export interface BacktrackResponse {
   observation_segments: ObservationSegment[];
   inference_segments: InferenceSegment[];
   candidate_paths: CandidatePath[];
-  overall_confidence: number | null;   // 可能为 null
+  overall_confidence: number | null; // 可能为 null
   identity?: IdentityInfo | null;
   evidence?: Evidence | null;
   target_instance?: TargetInstance | null;
@@ -200,7 +213,7 @@ export interface BacktrackRequest {
   max_upstream?: number;
   max_downstream?: number;
   /** auto 自动选路 / strong 强制强身份 / stitch 强制概率拼接 */
-  mode?: 'auto' | 'strong' | 'stitch';
+  mode?: "auto" | "strong" | "stitch";
 }
 
 /** 单摄像头在完整轨迹中的段（POST /backtrack/trajectory） */

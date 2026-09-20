@@ -335,6 +335,8 @@ class TrajectoryBuilder:
         self._scene_tracklets: Dict[str, List[Tracklet]] = {}
         self._scene_edges: Dict[str, List[CrossCameraEdge]] = {}
         self._result_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        # 摄像头 → 推断出的画面尺寸 (宽, 高)；用于时间线帧的 bbox 归一化（PLAN4-T1）
+        self._camera_frame_size_cache: Dict[str, Optional[Tuple[int, int]]] = {}
 
     # ================================================================
     # 数据加载
@@ -1515,6 +1517,111 @@ class TrajectoryBuilder:
     # /trajectory 视图（按 vehicle_id 的完整摄像头时间线）
     # ================================================================
 
+    # ---- 时间线帧构造（轨迹还原动画的数据基础，PLAN4-T1） ----
+
+    def _camera_frame_size(self, camera_id: str) -> Optional[Tuple[int, int]]:
+        """
+        推断某摄像头的画面尺寸 (宽, 高)
+
+        数据里没有直接存画面尺寸，但检测框是**原始视频像素坐标**，因此可以用
+        该摄像头全部检测框的最大范围作为画面尺寸的**下界估计**：
+        画面至少装得下所有框，所以真实尺寸 >= 这个值。
+
+        - 同一摄像头的所有帧共用同一个分母 ⇒ **相对运动（归一化后的位移）是准确的**，
+          这对轨迹还原动画来说才是关键。
+        - 返回值会随 `frame_size_source` 一起给出，调用方据此决定是否标注"比例未知"。
+
+        Returns:
+            (宽, 高)；该摄像头没有任何检测时返回 None
+        """
+        if camera_id in self._camera_frame_size_cache:
+            return self._camera_frame_size_cache[camera_id]
+
+        size: Optional[Tuple[int, int]] = None
+        max_w = max_h = 0
+        for det in self._all_detections:
+            if det.get("camera_id") != camera_id:
+                continue
+            bbox = det.get("bbox")
+            if not bbox or len(bbox) < 4:
+                continue
+            try:
+                max_w = max(max_w, int(float(bbox[2])))
+                max_h = max(max_h, int(float(bbox[3])))
+            except (TypeError, ValueError):
+                continue
+        if max_w > 0 and max_h > 0:
+            size = (max_w, max_h)
+
+        self._camera_frame_size_cache[camera_id] = size
+        return size
+
+    def _timeline_frame(self, camera_id: str, det: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        构造时间线里的单帧记录
+
+        ## 为什么加 bbox / bbox_norm
+
+        轨迹还原动画要展示"车在摄像头画面里怎么动"。最初的 frames[] 只有
+        frame_id/timestamp/crop_path/confidence —— 能显示实拍裁剪图，但**画不出位置**。
+        检测本身是带 bbox 的，只是没往上传，这里补上。
+
+        ## 归一化口径
+
+        `bbox_norm` = [cx/W, cy/H, w/W, h/H]，全部落在 [0,1]（除非框超出估计的画面范围）。
+        分母 W/H 来自 `_camera_frame_size()` 的**下界估计**，因此当 `frame_size_source`
+        为 `"inferred_from_detections"` 时，绝对值可能偏大 —— 但**相对运动不受影响**。
+        """
+        bbox = det.get("bbox")
+        bbox_out: Optional[List[float]] = None
+        bbox_norm: Optional[List[float]] = None
+
+        if bbox and len(bbox) >= 4:
+            try:
+                x1, y1, x2, y2 = (float(v) for v in bbox[:4])
+                bbox_out = [x1, y1, x2, y2]
+
+                size = self._camera_frame_size(camera_id)
+                if size is not None and size[0] > 0 and size[1] > 0:
+                    fw, fh = size
+                    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+                    bbox_norm = [
+                        round(cx / fw, 6),
+                        round(cy / fh, 6),
+                        round((x2 - x1) / fw, 6),
+                        round((y2 - y1) / fh, 6),
+                    ]
+            except (TypeError, ValueError):
+                bbox_out = None
+                bbox_norm = None
+
+        # 全局时间：跨摄像头比较必须用它（本机时间各摄像头独立起跳，见 T5）
+        global_ts = None
+        ts = det.get("timestamp", "")
+        parsed = _parse_timestamp(ts)
+        if parsed is not None:
+            converted = self.to_global_time(camera_id, parsed, det.get("scene_id"))
+            if converted is not None:
+                global_ts = _format_ts_full(converted)
+
+        frame_size = self._camera_frame_size(camera_id)
+
+        return {
+            "frame_id": det.get("frame_id", 0),
+            "timestamp": _format_ts_full(ts),
+            "crop_path": det.get("crop_path", det.get("keyframe_path", "")),
+            "confidence": det.get("confidence", 0.5),
+            # ---- PLAN4-T1 新增（纯追加，不删旧字段，向后兼容）----
+            "bbox": bbox_out,
+            "bbox_norm": bbox_norm,
+            "global_timestamp": global_ts,
+            "frame_size": list(frame_size) if frame_size else None,
+            # 画面尺寸是**推断**出来的下界，不是实测值 —— 让前端能如实标注
+            "frame_size_source": (
+                "inferred_from_detections" if frame_size else "unavailable"
+            ),
+        }
+
     def build_camera_timeline(
         self,
         track_id: Optional[str] = None,
@@ -1586,12 +1693,7 @@ class TrajectoryBuilder:
                 "detection_count": len(cam_dets),
                 "direction": self._camera_direction_map.get(camera_id, ""),
                 "frames": [
-                    {
-                        "frame_id": det.get("frame_id", 0),
-                        "timestamp": _format_ts_full(det.get("timestamp", "")),
-                        "crop_path": det.get("crop_path", det.get("keyframe_path", "")),
-                        "confidence": det.get("confidence", 0.5),
-                    }
+                    self._timeline_frame(camera_id, det)
                     for det in cam_dets
                 ],
                 # 依据标注：整条时间线都来自真实 vehicle_id 的检测
