@@ -29,14 +29,17 @@ src.trajectory.builder
 
 ```
 
-**Implemented but NOT on the serving path** — `src/perception/*` (6), `src/retrieval/*` (4), `src/tracking/*` (2), `src/output/trajectory_output.py`. These have real logic (there are **no `TODO`/stub modules** in `src/`), but only tests and `scripts/pipeline_validation.py` / `scripts/*_feature_pipeline.py` import them.
+**Implemented but NOT on the serving path** — `src/perception/*` (6), `src/retrieval/*` (5), `src/tracking/*` (2), `src/output/trajectory_output.py`. These have real logic (there are **no `TODO`/stub modules** in `src/`), but only tests and `scripts/pipeline_validation.py` / `scripts/*_feature_pipeline.py` import them.
+
+One of them, `src/retrieval/blip_reranker.py`, is a **deliberate** case rather than an oversight: it works and is tested, but is **off by default** because it was measured and found not to discriminate on this dataset (see "Two datasets, two sets of numbers" below).
 
 Three unreachable modules were **deleted on 2026-09-21** (`src/backtrack/`, `src/data_governance/video_stream.py`, and the never-imported DI skeleton `api/dependencies.py`). If you find a reference to them, it is stale.
 
 Two notable consequences to keep in mind when editing:
 
 - `api/routes/search.py` implements its own query parsing (`_extract_query_features`) and attribute filtering (`_attribute_filter`) rather than using `src/retrieval/query_parser.py` / `attribute_filter.py`. The two implementations differ (the route's own comment records a "皮卡 vs 卡车" keyword bug that the `src/` version never had).
-- The deployed retrieval model is Chinese-CLIP **ViT-B-16** (512-dim) via the `cn_clip` package, **not** the CN-CLIP ViT-L/14 (768-dim) that `configs/default.yaml` and most docs still name. Likewise **BLIP and OSNet appear nowhere in the code** — `docs/` describes them as part of the *designed* system (the paper's design lineage), not the deployed implementation. Trust the code, not the docs.
+- The deployed retrieval model is Chinese-CLIP **ViT-B-16** (512-dim) via the `cn_clip` package, **not** the CN-CLIP ViT-L/14 (768-dim) that `configs/default.yaml` and most docs still name. Trust the code, not the docs.
+- **BLIP and OSNet are now real code, but still not on the serving path** (this reverses an earlier version of this file, which correctly said they appeared nowhere). Both were added on 2026-09-21 as *offline* capabilities in PLAN5: `src/retrieval/blip_reranker.py` (BLIP ITM reranking, default off — measured non-discriminating) and `scripts/extract_reid_osnet.py` (OSNet 512-dim embeddings, an alternative to fast-reid). Nothing in `api/` calls either. The retrieval path still uses Chinese-CLIP + FAISS only.
 
 **Data access is unified.** All online reads go through `src/storage/datastore.py`; nothing else opens `output/cityflow_results.json` (a 75MB file with 68,349 detections). `load_results()` returns a dict structurally equivalent to that JSON (`detections` / `tracks` / `summary` / `det_to_track_map`) but reads Parquet + SQLite from `output/datastore/`, falling back to JSON parse only if the datastore is missing, corrupt, or `schema_version` != 1. This convergence is enforced by `tests/test_datastore.py::test_only_datastore_opens_cityflow_json`, which greps every `.py` under `api/` and `src/` (the Streamlit frontend it used to cover was removed).
 
@@ -104,6 +107,15 @@ Evaluation scripts live in `scripts/eval_*.py` and **never hit HTTP** — they i
 
 The offline data pipelines have hard ordering, enforced by `sys.exit` guards inside the scripts: `extract_attributes.py` → `merge_attributes.py`; `extract_reid.py` → `build_reid_tracks.py`; `unify_clip_949.py` → `merge_clip_unified.py`. The `merge_*` scripts rewrite `output/cityflow_results.json` atomically and idempotently, after which `build_datastore.py` must be re-run.
 
+### Training / extraction scripts (all offline, none on the serving path)
+
+Added on 2026-09-21. They produce artifacts under `output/` and are **not** imported by `api/`:
+
+- `extract_reid_osnet.py` — OSNet 512-dim vehicle embeddings, row-aligned to `detections`. Deliberately a **separate script** from `extract_reid.py`: fast-reid goes through a vendored source tree + yml, OSNet through torchreid's Python API, and the two share no model-construction or preprocessing code. They only agree on the **output format**, which is what makes the backbone comparison possible. Supports `--no-resume`; by default it **resumes** from `done_rows.npy`. Note OSNet's public weights are **pedestrian**-trained while this task is **vehicles** — cross-domain, so expect it to underperform, and report what is measured rather than what is expected.
+- `build_reid_training_set.py` — builds train/val splits, **split by camera, not by random image**. Random splitting would put adjacent frames of the same vehicle in both sides, inflating val while never testing cross-camera generalisation. The leak metric is `per_identity_camera_leaks` (must be 0); `camera_seen_in_both_splits` being large is **normal** (46 cameras carry 215 vehicles).
+- `train_reid_triplet.py` — PK sampling + batch-hard `TripletLoss`. `--hard-mining` adds cross-batch mining on top (batch-hard only mines within a batch, so a batch without hard negatives mines nothing).
+- `train_edge_scorer.py` — treats the six scoring dimensions as **features** and learns weights with `BCE + Ranking`. Deliberately **linear** so the result is comparable to the grid-searched weights in `configs/default.yaml`. Read its docstring before trusting any number it prints: its default negatives are random cross-vehicle pairs, which do **not** match the production candidate distribution, and that makes `spatial_score` degenerate into a same-scene indicator. `--negatives-from-candidates` is the corrected mode. Edge building is cached (`edges_*.json`); `--rebuild-edges` forces a rebuild.
+
 ## Configuration
 
 `configs/default.yaml` is loaded by `src/common/config.py` (`Config` class, dot-path access via `config.get("system.device")`). A global singleton is exposed through `get_config()` / `reset_config()`. Environment variables override values using the `TRAFFIC__SECTION__KEY` convention (e.g. `TRAFFIC__SYSTEM__DEVICE=cpu` → `system.device`).
@@ -116,6 +128,18 @@ Key artifacts referenced by the serving path:
 - Camera metadata: `configs/cityflow_camera_metadata.yaml`.
 
 Stitching weights are target-type dependent and live in `configs/default.yaml` under `stitching.weights`. The `vehicle` entry currently zeroes `reid` and `attribute` — not an oversight: they measured those soft scores as noise on this data and moved appearance/attribute to hard gates in `src/stitching/candidate_edge.py` (rules 7 and 8, gated by `stitching.min_appearance_score`). `reweight_missing_dimensions` redistributes weight away from dimensions with no evidence, keeping the total at 1.0 instead of adding a constant offset to every candidate.
+
+## Two datasets, two sets of numbers — never mix them
+
+Every metric in this repository comes from **AICity22** (the tracked dataset under `output/`, 68,349 detections / 230 vehicle identities / 46 cameras / 0 plates). The figures quoted in the résumé and in `docs/` — **P@10 0.973, F1 0.819** — come from a **different, business dataset** (苏州 48 路) that is not in this repo.
+
+These are not comparable and must never be presented as one set. When writing docs, reports, or commit messages:
+
+- Label which dataset a number came from. "P@10 0.973" unqualified is wrong here.
+- Do not "correct" a résumé figure to a repo-measured one, or vice versa — they answer different questions.
+- Numbers measured on AICity22 are typically **far worse**, and the reason is usually the data, not the algorithm: crop median is **118×98 px** (so cross-camera ReID d-prime is only **0.78**, and BLIP ITM measured *below* chance), and the dataset has **no license plates at all**, which silently removes one of the six scoring dimensions.
+
+This rule predates this file (it is PLAN2's red line) and is the reason several modules in this repo ship with a documented negative result instead of a tuned-up number.
 
 ## Conventions
 
