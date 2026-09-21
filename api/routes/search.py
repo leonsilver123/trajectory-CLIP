@@ -214,10 +214,26 @@ def _extract_query_features(query_text: str) -> Dict[str, Any]:
         'MPV': ['mpv', '商务'],
         '皮卡': ['皮卡', 'pickup'],
     }
+
+    # 方向映射（PLAN5-D1）：中文说法 → 摄像头元数据里的 lane_direction 取值。
+    # 与车型同理，匹配时取**最长命中** —— '北' 是 '由南向北' 的子串，
+    # 若按顺序取首个命中，"由南向北" 会被误判成"向北"（northbound 恰好也对，
+    # 但"由北向南"会被 '北' 抢先命中成 northbound，那是**反向**错误）。
+    DIRECTION_MAP = {
+        'northbound': ['由南向北', '南向北', '向北', '北向', '朝北', 'northbound'],
+        'southbound': ['由北向南', '北向南', '向南', '南向', '朝南', 'southbound'],
+        'eastbound':  ['由西向东', '西向东', '向东', '东向', '朝东', 'eastbound'],
+        'westbound':  ['由东向西', '东向西', '向西', '西向', '朝西', 'westbound'],
+    }
     
     extracted = {
         'color': None,
         'vehicle_type': None,
+        # PLAN5-D1：方向是简历里明确写的第三维。
+        # 检测本身**不带方向字段**，但摄像头带 `lane_direction`
+        # （configs/cityflow_camera_metadata.yaml，取值 eastbound/westbound/northbound/southbound），
+        # 所以"按方向找车"实现为"按摄像头所在车道方向过滤"—— 这是数据支持的语义。
+        'direction': None,
         'keywords': []
     }
     
@@ -249,8 +265,113 @@ def _extract_query_features(query_text: str) -> Dict[str, Any]:
         is_type = any(kw in word_lower for types in TYPE_MAP.values() for kw in types)
         if not is_color and not is_type:
             extracted['keywords'].append(word)
+
+    # 提取方向（PLAN5-D1）
+    # 取**最长命中**，与车型同样的理由：'北' 是 '由南向北' 的子串，
+    # 按顺序取首个命中会把"由南向北"误判成"北向"。
+    best_dir_len = 0
+    for direction, kws in DIRECTION_MAP.items():
+        for kw in kws:
+            if kw in query_lower and len(kw) > best_dir_len:
+                best_dir_len = len(kw)
+                extracted['direction'] = direction
+
     
     return extracted
+
+
+def _load_camera_directions() -> Dict[str, str]:
+    """摄像头 → 车道方向（eastbound/westbound/northbound/southbound）。
+
+    读 `configs/cityflow_camera_metadata.yaml`；读不到时返回空字典，
+    此时方向维度整体不可用 —— `_attribute_consistency` 会把它当"无证据"处理，
+    而不是当成"不匹配"（后者会把所有候选误杀）。
+    """
+    try:
+        import yaml
+
+        with open(_CAMERA_METADATA_PATH, "r", encoding="utf-8") as f:
+            meta = yaml.safe_load(f) or {}
+        return {
+            c["camera_id"]: c.get("lane_direction") or ""
+            for c in (meta.get("cameras") or [])
+            if c.get("camera_id")
+        }
+    except Exception as e:
+        logger.warning("读取摄像头方向失败，方向维度将不可用: %s", e)
+        return {}
+
+
+CAMERA_DIRECTIONS: Dict[str, str] = _load_camera_directions()
+
+
+DEFAULT_ATTRIBUTE_WEIGHTS = {"color": 0.40, "vehicle_type": 0.40, "direction": 0.20}
+
+
+def _load_attribute_weights() -> Dict[str, float]:
+    """读取属性三维权重（retrieval.attribute_weights）；读不到用内置兜底值"""
+    try:
+        from src.common.config import get_config
+
+        cfg = get_config().get("retrieval.attribute_weights", {}) or {}
+        merged = dict(DEFAULT_ATTRIBUTE_WEIGHTS)
+        for k in merged:
+            if isinstance(cfg.get(k), (int, float)):
+                merged[k] = float(cfg[k])
+        return merged
+    except Exception as e:
+        logger.warning("读取 attribute_weights 失败，使用兜底权重: %s", e)
+        return dict(DEFAULT_ATTRIBUTE_WEIGHTS)
+
+
+ATTRIBUTE_WEIGHTS: Dict[str, float] = _load_attribute_weights()
+
+
+def _attribute_consistency(det: Dict[str, Any], query_features: Dict) -> Optional[float]:
+    """
+    颜色 / 车型 / 方向 三维一致性加权分（PLAN5-D2）
+
+    每一维的取值是三态，**不是布尔**：
+        1.0  查询指定了该维，且检测与之相符
+        0.0  查询指定了该维，且检测与之不符
+        0.5  查询没有指定，或检测该维未知（**无证据**，不奖励也不惩罚）
+
+    只有**查询里明确指定**的维度参与加权；未指定的维度整维剔除，
+    其权重按比例分摊给其余维度（保持权重总和不变）。
+    这与 `stitching.reweight_missing_dimensions` 是同一原则 ——
+    否则"没问方向"会让每个候选都加上同一个常数偏移，白白压缩区分度。
+
+    Returns:
+        加权一致性分 [0,1]；查询没有指定任何维度时返回 None
+        （调用方应据此**不使用**这一项，而不是当成 0 或 0.5）。
+    """
+    camera_id = det.get("camera_id", "")
+    attrs = det.get("attributes") or {}
+
+    # 每一维：(查询值, 检测值)
+    dims = {
+        "color": (query_features.get("color"), attrs.get("color")),
+        "vehicle_type": (query_features.get("vehicle_type"), attrs.get("vehicle_type")),
+        "direction": (query_features.get("direction"), CAMERA_DIRECTIONS.get(camera_id)),
+    }
+
+    total_w = 0.0
+    acc = 0.0
+    for name, (q_val, d_val) in dims.items():
+        if not q_val:
+            continue                      # 查询没问这一维 -> 整维剔除
+        w = ATTRIBUTE_WEIGHTS.get(name, 0.0)
+        if w <= 0:
+            continue
+        total_w += w
+        if not d_val:
+            acc += w * 0.5                # 检测该维未知 -> 中性
+        else:
+            acc += w * (1.0 if q_val == d_val else 0.0)
+
+    if total_w <= 0:
+        return None
+    return acc / total_w
 
 
 def _attribute_filter(detections: List[Dict], query_features: Dict) -> List[Dict]:
@@ -274,6 +395,13 @@ def _attribute_filter(detections: List[Dict], query_features: Dict) -> List[Dict
         # 车型过滤
         if query_features['vehicle_type']:
             if det_type != query_features['vehicle_type'] and det_type != 'unknown':
+                continue
+        # 方向过滤（PLAN5-D1）：按**摄像头所在车道方向**过滤。
+        # 查询没给方向时不参与；摄像头方向未知时放行（不当成不匹配）。
+        q_dir = query_features.get('direction')
+        if q_dir:
+            cam_dir = CAMERA_DIRECTIONS.get(det.get('camera_id', ''))
+            if cam_dir and cam_dir != q_dir:
                 continue
         
         filtered.append(det)
@@ -376,16 +504,25 @@ def _build_candidates_with_clip(data: Dict[str, Any], query: str,
         conf = det.get("confidence", 0.5)
         attrs = det.get("attributes", {})
 
-        # 属性/文本匹配分数（作为 attribute_score）
-        attr_score = conf
-        if keywords:
-            match_count = 0
-            searchable = f"{t_type} {json.dumps(attrs, ensure_ascii=False)}".lower()
-            for kw in keywords:
-                if kw in searchable:
-                    match_count += 1
-            if match_count > 0:
-                attr_score = min(0.5 + match_count * 0.15 + conf * 0.3, 0.99)
+        # ---- 属性一致性约束重排（PLAN5-D2）----
+        # 三个维度（颜色 / 车型 / 方向）各自给出三态取值后加权；
+        # 查询未指定的维度整维剔除并按比例重分摊，不产生常数偏移。
+        consistency = _attribute_consistency(det, query_features)
+
+        if consistency is not None:
+            # 一致性为主、检测置信度为辅：属性再对，置信度极低的目标也该降权
+            attr_score = 0.7 * consistency + 0.3 * conf
+        else:
+            # 查询没有指定任何可核对的属性 -> 退回关键词命中 + 置信度（原行为）
+            attr_score = conf
+            if keywords:
+                match_count = 0
+                searchable = f"{t_type} {json.dumps(attrs, ensure_ascii=False)}".lower()
+                for kw in keywords:
+                    if kw in searchable:
+                        match_count += 1
+                if match_count > 0:
+                    attr_score = min(0.5 + match_count * 0.15 + conf * 0.3, 0.99)
 
         # CLIP 向量相似度分数
         target_id = det.get('target_id', '')
@@ -400,7 +537,7 @@ def _build_candidates_with_clip(data: Dict[str, Any], query: str,
             # 无 CLIP 时退化为属性分数
             final_score = attr_score
 
-        scored_dets.append((det, final_score, clip_score, attr_score))
+        scored_dets.append((det, final_score, clip_score, attr_score, consistency))
 
     # 按融合分数降序
     scored_dets.sort(key=lambda x: x[1], reverse=True)
@@ -410,7 +547,7 @@ def _build_candidates_with_clip(data: Dict[str, Any], query: str,
     candidates = []
     rank = 0
 
-    for det, final_score, clip_score, attr_score in scored_dets:
+    for det, final_score, clip_score, attr_score, consistency in scored_dets:
         target_id = det.get('target_id', '')
         track_id = det_to_track_map.get(target_id, '')
         

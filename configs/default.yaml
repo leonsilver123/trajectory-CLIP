@@ -215,6 +215,21 @@ retrieval:
   clip_model: "CN-CLIP-ViT-B-16"    # 实际生效（非 ViT-L-14）
   rerank_top_n: 5                   # 设计口径：重排后返回数量
 
+  # 属性一致性重排的三个维度权重（PLAN5-D2）
+  #
+  # 这是**在线检索实际读取**的配置（与其他 retrieval.* 键不同，那些无人读）。
+  # 三个维度分别为：颜色、车型、方向。
+  # 方向取自摄像头元数据的 `lane_direction` —— 检测本身不带方向字段，
+  # 所以"按方向找车"的语义是"按摄像头所在车道方向"。
+  #
+  # 加权方式：只对**查询里明确指定**的维度加权，未被指定的维度整维剔除并按比例
+  # 重分摊（与 stitching.reweight_missing_dimensions 同一原则）——
+  # 否则"没问方向"会变成对每个候选都加同一个常数偏移。
+  attribute_weights:
+    color: 0.40                     # 颜色
+    vehicle_type: 0.40              # 车型
+    direction: 0.20                 # 方向
+
 # 轨迹回溯
 backtrack:
   max_upstream_depth: 10            # 最大上游回溯深度
