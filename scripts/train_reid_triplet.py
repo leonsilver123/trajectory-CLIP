@@ -83,6 +83,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--limit-per-id", type=int, default=0,
                    help="每身份最多用多少张（冒烟用，0=不限）")
+    p.add_argument("--image-cache-size", type=int, default=2000,
+                   help="图片缓存条数上限（0=不限）。内存紧张时调小")
     return p.parse_args()
 
 
@@ -116,12 +118,24 @@ def load_records(dataset_dir: Path, limit_per_id: int = 0):
 
 
 class CropDataset:
-    """按路径读裁剪图并做与推理一致的预处理"""
+    """
+    按路径读裁剪图并做与推理一致的预处理
 
-    def __init__(self, records, label_of, transform):
+    缓存是**有界**的（`cache_size`）。原先是无界字典 —— 每个 epoch 都不释放，
+    训练结束时全量图片仍驻留内存。本数据集裁剪图中位数 118×98，单张不大，
+    但 5024 张训练图累加起来仍需数百 MB；而本机可用内存经常只有 1 GB 出头，
+    无界缓存足以把进程推到 OOM。
+
+    淘汰策略是"满了就整体清空"而不是 LRU：PK 采样本身按随机身份取图，
+    命中率对访问顺序不敏感，LRU 的记账开销换不来实际收益。
+    `cache_size=0` 表示不限制（保留旧行为，供内存宽裕时使用）。
+    """
+
+    def __init__(self, records, label_of, transform, cache_size: int = 2000):
         self.records = records
         self.label_of = label_of
         self.transform = transform
+        self.cache_size = cache_size
         self.cache: dict[int, object] = {}
 
     def __len__(self):
@@ -132,7 +146,7 @@ class CropDataset:
 
         r = self.records[i]
         path = ROOT / r["crop_path"]
-        img = self.cache.get(i)
+        img = None if self.cache_size == 0 else self.cache.get(i)
         if img is None:
             try:
                 img = Image.open(path).convert("RGB")
@@ -142,7 +156,10 @@ class CropDataset:
                 from PIL import Image as I
 
                 img = I.fromarray(np.zeros((256, 128, 3), dtype="uint8"))
-            self.cache[i] = img
+            if self.cache_size:
+                if len(self.cache) >= self.cache_size:
+                    self.cache.clear()
+                self.cache[i] = img
         return self.transform(img), self.label_of.get(r["vehicle_id"], -1)
 
 
@@ -322,8 +339,8 @@ def main() -> None:
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    train_ds = CropDataset(train_recs, label_of, transform)
-    val_ds = CropDataset(val_recs, label_of, eval_transform)
+    train_ds = CropDataset(train_recs, label_of, transform, args.image_cache_size)
+    val_ds = CropDataset(val_recs, label_of, eval_transform, args.image_cache_size)
 
     model = build_model(args.arch, num_classes=n_ids, pretrained=True, use_gpu=False)
     model.to(device)
@@ -432,6 +449,7 @@ def main() -> None:
         "hard_mining": bool(args.hard_mining),
         "id_loss_weight": id_w,
         "p": args.p, "k": args.k, "margin": args.margin,
+        "image_cache_size": args.image_cache_size,
         "dataset": str(args.dataset),
         "note": (
             "本数据集仅 215 个身份，指标不可与 VeRi/MSMT17 等公开基准直接比较；"
