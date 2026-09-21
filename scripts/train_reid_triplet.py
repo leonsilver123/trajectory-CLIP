@@ -131,7 +131,7 @@ def _warn_if_val_not_cross_camera(val_records) -> bool:
     multi = sum(1 for v in cams.values() if len(v) >= 2)
     if multi == 0:
         logger.warning(
-            "⚠️ 验证集**不是跨摄像头口径**：%d 个身份在 val 里各自只占 1 个摄像头，"
+            "[!] 验证集**不是跨摄像头口径**：%d 个身份在 val 里各自只占 1 个摄像头，"
             "因此下面所有 Rank-1/5/mAP 衡量的都是**同摄像头内的外观记忆**，"
             "**不能**当作跨镜泛化指标、也**不可**与 eval_cross_camera.py 的数字并列。"
             "要看跨镜数字请用 `scripts/eval_cross_camera.py`。",

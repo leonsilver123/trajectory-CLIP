@@ -703,7 +703,7 @@ def validate_config(config: Dict[str, Any]) -> bool:
         if unreachable:
             errors.append(f"不可达摄像头: {unreachable}")
         else:
-            logger.info("拓扑连通性: 全部连通 ✓")
+            logger.info("拓扑连通性: 全部连通 [OK]")
 
     if errors:
         logger.warning(f"发现 {len(errors)} 个问题:")
@@ -711,7 +711,7 @@ def validate_config(config: Dict[str, Any]) -> bool:
             logger.warning(f"  - {err}")
         return False
     else:
-        logger.info("配置验证通过 ✓")
+        logger.info("配置验证通过 [OK]")
         return True
 
 

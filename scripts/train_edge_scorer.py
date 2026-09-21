@@ -498,7 +498,7 @@ def main() -> None:
     degenerate = n_val_pos < 20 or n_val_neg < 20
     if degenerate:
         logger.error(
-            "⚠️ 验证边严重不平衡：正 %d / 负 %d（训练 正 %d / 负 %d）—— "
+            "[!] 验证边严重不平衡：正 %d / 负 %d（训练 正 %d / 负 %d）—— "
             "**此条件下的 AUC / acc 不可解释**，AUC=1.0 只说明正样本恰好排前面，"
             "不代表模型可用。读数前请先看这里。",
             n_val_pos, n_val_neg, n_tr_pos, len(rows_train) - n_tr_pos)
