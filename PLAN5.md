@@ -106,7 +106,7 @@
   - **验收**：能构造 OSNet 并对一张裁剪图出 512 维向量
 - `[x]` **B2** `scripts/extract_reid.py` 增加 `--backbone osnet_x1_0|fastreid` 选项
   - **验收**：两种 backbone 都能跑出向量，落盘到不同文件
-- `[ ]` **B3** 用 `scripts/eval_cross_camera.py` 做 **OSNet vs fast-reid 对照**
+- `[~]` **B3** 用 `scripts/eval_cross_camera.py` 做 **OSNet vs fast-reid 对照**
   - **验收**：出 Rank-1 / Rank-5 / mAP 对照表，如实报告谁更好
 
 ### C. 训练（三项声明的落点）
@@ -114,13 +114,13 @@
 - `[x]` **C1** 构建训练数据 `scripts/build_reid_training_set.py`
   - 从 `vehicle_id` 生成身份标签；**按摄像头切分**避免同车跨集泄漏
   - **验收**：产出 train/val 身份不重叠的清单 + 统计
-- `[x]` **C2** Batch Hard Triplet 训练 ReID 嵌入 `scripts/train_reid_triplet.py`
+- `[~]` **C2** Batch Hard Triplet 训练 ReID 嵌入 `scripts/train_reid_triplet.py`
   - PK sampling（每 batch P 个身份 × K 张图）+ batch-hard 挖掘
   - **验收**：训练收敛（loss 下降），val 上 Rank-1 高于随机基线；产物落盘
-- `[ ]` **C3** Hard Negative Mining
+- `[~]` **C3** Hard Negative Mining
   - 在每个 epoch 后用当前模型挖难负样本，重训
   - **验收**：与 C2 不开挖掘的版本做对照，如实报告增益或**负增益**
-- `[ ]` **C4** BCE + Ranking Loss 训练边评分器 `scripts/train_edge_scorer.py`
+- `[~]` **C4** BCE + Ranking Loss 训练边评分器 `scripts/train_edge_scorer.py`
   - 从 GT `vehicle_id` 构造正负边（同车=正、异车=负）；BCE + ranking 联合
   - **验收**：训练后在 val 边上算 AUC/准确率；与"网格搜索权重"版本在 IDF1 上对照
 
@@ -142,8 +142,8 @@
 
 - `[ ]` **F1** 跑全套评测并产出**本数据集口径**的指标表（P@10 / mAP / F1 / IDF1）
 - `[ ]` **F2** 更新 `CLAUDE.md`、`docs/`，**两套数据集的数字分开标注**
-- `[ ]` **F3** 新增测试守护；全量回归
-- `[ ]` **F4** commit + push
+- `[x]` **F3** 新增测试守护；全量回归
+- `[x]` **F4** commit + push
 
 ---
 
@@ -168,4 +168,6 @@
 | 2026-09-21 | **P-A 性能缺陷（做 C4 时发现）** | `CrossCameraScorer._count_possible_paths`（`src/stitching/scoring.py`）用**无界 DFS 枚举简单路径**：只限制了计数（`found < max_paths`）、没限制搜索，两点不可达时循环条件恒真，走完整棵指数级路径树。实测 **单对摄像头 348 万次递归 / 1.84 秒**（c029→c030），而**线上每对候选边都要调一次**。此前只在 `builder.py` 的子类 `BoundedCrossCameraScorer` 里绕开过 —— **基类一直是坏的**，任何直接用 `CrossCameraScorer` 的代码（如 C4 构边）都会撞上。**影响范围要说准**：`TrajectoryBuilder._scene_edge_pool` 显式传了 `scorer=self._get_scorer()`，所以**生产路径一直有保护**；真正暴露的是不传 `scorer` 时的 `CandidateEdgeGenerator`（`candidate_edge.py:114` 自建基类）与直接实例化基类的脚本 | 上限（`MAX_PATH_HOPS=6` / `PATH_EXPANSION_BUDGET=20000`）**下沉到基类**，子类降级为兼容别名。**1035 对全拓扑从几十分钟降到 0.35 秒**；新增 `tests/test_path_count_bounds.py`（8 项）。**不改变任何线上行为**，只是拆掉地雷 |
 | 2026-09-21 | P-A 的**诚实附注** | 我最初把它当"等价重构"写，**实测后发现不等价**：旧实现能终止的 709 对里 **278 对（39.2%）返回值不同**，集中在 `(旧 5, 新 1)` —— 旧版把 **>6 跳**的绕行也计入了。对 `path_divergence_penalty` 影响最大 0.80、平均 0.27，×权重 0.1 后**对总分影响最大 0.08**。也试过用"反向可达性剪枝 + 压入即计数"保住精确语义：能把可比对对数提到 814 且**零差异**，但仍有 221 对爆炸（最坏 c011→c040 需 195 万次扩展）—— 简单路径计数是 **#P-hard**，指数下界绕不过去 | **接受语义变化**并写进 `scoring.py` docstring（含上面这张差异表）。理由：系统自身可达性假设就是 ≤6 跳，把 9 跳绕行算作"同一辆车可能走的路线"本就可疑；且**线上路径一直在用这个语义**（builder 一直用子类），本次是让基类与线上口径**趋于一致**，不是引入新偏离 |
 | 2026-09-21 | **E1** | **更正我先前的错误结论**。我说过"简历写 BFS 但代码是 Dijkstra"——**错了**。实测：`is_reachable()` **本来就是 BFS**（`deque`+`popleft`+hop 计数），`shortest_path()` 才是 Dijkstra。**两者分工并存，简历的「BFS 路网拓扑」是准确的** | 新增 `tests/test_road_topology_bfs.py`（9 项）把这件事钉住：若有人把 `is_reachable` 改成带权最短路（功能等价、但会让简历变假），测试会红 |
+| 2026-09-21 | **F3 / F4** | 全量回归（`pytest tests/`，exit 0）+ 定向 54 项通过；6 个提交推送至 `origin/main` | 工作区干净，`main` 与 `origin/main` 同步 |
+| 2026-09-21 | **B2 续跑能力（重跑 OSNet 时补）** | 按用户指示重启 OSNet 全量提取。**先前诊断为"卡住"是错的** —— 进程 CPU 10 秒只涨 0.1 秒、内存涨到 909MB，看着像死锁；实测吞吐后发现是内存只剩 0.4GB 时被**换页**拖死（本机物理 15.8GB、**提交量 33.4GB**，严重超售）。腾出内存后同样工作跑得动，实测 **7.65 张/秒 ⇒ 全量 68,349 张约 2.5 小时**。另发现 `save_checkpoint` **只写不读**，中断后重跑仍从第 0 行开始 —— 已补续跑（读回 `done_rows.npy` 跳过已算行） | 续跑验证：读回 400 条、1.3 秒完成（原本 52.3 秒）。踩到一个 Windows 专属坑：续跑若用 `mmap_mode="r"`，映射会持有文件句柄，而 `save_checkpoint` 要写回同一 `.npy` ⇒ `OSError: [Errno 22]`（Linux 允许，只在 Windows 炸）。已改为普通读取 |
 | 2026-09-21 | **A 段负结果** | 80 样本 + 40 样本两次独立测量 BLIP ITM 判别力 | **51.2% / 22.5%** —— 均不可用；分数被短语偏置主导而非图文匹配。精排模块保留但**默认不启用**，理由见 A 段 |
