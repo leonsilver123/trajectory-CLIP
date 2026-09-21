@@ -134,11 +134,13 @@ def build_tracklets(max_identities: int, seed: int):
         sys.exit("[fatal] 数据不可用")
 
     groups: dict[tuple, list] = defaultdict(list)
-    for det in data.get("detections", []):
+    rows_of: dict[tuple, list] = defaultdict(list)
+    for row, det in enumerate(data.get("detections", [])):
         vid = extract_vehicle_id(det.get("target_id") or "")
         cam = det.get("camera_id")
         if vid and cam:
             groups[(vid, cam)].append(det)
+            rows_of[(vid, cam)].append(row)
 
     # 只保留出现在 ≥2 个摄像头的身份（跨镜边才有意义）
     by_id: dict[str, list] = defaultdict(list)
@@ -151,10 +153,55 @@ def build_tracklets(max_identities: int, seed: int):
     ids = ids[:max_identities]
 
     logger.info("参与构建的身份: %d（原本 %d 个跨多摄像头身份）", len(ids), len([1 for v, c in by_id.items() if len(c) >= 2]))
-    return {v: by_id[v] for v in ids}
+    return {v: by_id[v] for v in ids}, {k: v for k, v in rows_of.items() if k[0] in set(ids)}
 
 
-def make_tracklet(cam: str, dets: list, vid: str):
+def load_tracklet_reid(rows_of, dim_hint: int = 2048):
+    """
+    按 (身份, 摄像头) 求检测级 ReID 向量的均值，得到"轨迹级"外观向量
+
+    ## 为什么必须有这一步（2026-09-21 实测踩到）
+
+    `make_tracklet` 初版把 `avg_reid_vector` / `avg_clip_vector` 都留成 None，
+    于是 `CandidateEdgeGenerator._compute_appearance_similarity` 恒返回中性 0.5，
+    而规则 8 的阈值来自配置的 `min_appearance_score`（0.95）——
+    **0.5 < 0.95，所有候选边被无条件拒掉**。实测：792,368 对 → 粗筛通过 138,000
+    → **有效候选边 0 条**。
+
+    这是构造缺陷，**不是"生产门控把边全滤掉了"** —— 生产路径的 tracklet 是带
+    ReID 向量的（轨迹级旁挂表），门控有真实证据可判。不把这个补上，
+    `--negatives-from-candidates` 这条正确路线根本跑不起来。
+
+    用检测级 fast-reid 向量（68,349 × 2048，行号与 detections 对齐）按组求均值，
+    等效于生产从轨迹级旁挂表取向量的做法。用 mmap 逐块求均值，避免把
+    560MB 的矩阵整个读进内存（本机可用内存常年只有 1–3 GB）。
+    """
+    npy = ROOT / "output" / "reid" / "reid_vectors.npy"
+    if not npy.exists():
+        logger.warning("找不到 %s —— 轨迹级外观向量将缺失，候选边门控会拒掉全部边", npy)
+        return {}
+    arr = np.load(str(npy), mmap_mode="r")
+    out = {}
+    n_ok = 0
+    for key, rows in rows_of.items():
+        vecs = []
+        for r in rows:
+            if r >= arr.shape[0]:
+                continue
+            v = np.asarray(arr[r], dtype=np.float32)
+            if not np.isnan(v).any():
+                vecs.append(v)
+        if vecs:
+            m = np.mean(vecs, axis=0)
+            nrm = float(np.linalg.norm(m))
+            out[key] = m / nrm if nrm > 0 else m
+            n_ok += 1
+    logger.info("轨迹级 ReID 向量: %d/%d 个 (身份,摄像头) 组有有效向量（dim=%d）",
+                n_ok, len(rows_of), arr.shape[1])
+    return out
+
+
+def make_tracklet(cam: str, dets: list, vid: str, reid_vec=None):
     """
     把一组检测包成 scoring 需要的 Tracklet 对象
 
@@ -186,7 +233,9 @@ def make_tracklet(cam: str, dets: list, vid: str):
         direction="",
         plate_number=None,
         attributes=attrs,
-        avg_reid_vector=None,
+        # 必须带上外观向量，否则规则 8 的外观门控会把所有候选边拒掉（见
+        # `load_tracklet_reid` 的说明）。ReID 优先于 CLIP，与生产同序。
+        avg_reid_vector=reid_vec,
         avg_clip_vector=None,
         keyframe_paths=[],
     )
@@ -385,10 +434,12 @@ def main() -> None:
     args = parse_args()
     import torch
 
-    index = build_tracklets(args.max_identities, args.seed)
-    # 把 (cam, dets) 变成 (cam, Tracklet)
+    index, rows_of = build_tracklets(args.max_identities, args.seed)
+    reid_of = load_tracklet_reid(rows_of)
+    # 把 (cam, dets) 变成 (cam, Tracklet)，并挂上轨迹级 ReID 向量
     tl_index = {
-        vid: [(cam, make_tracklet(cam, dets, vid)) for cam, dets in cams]
+        vid: [(cam, make_tracklet(cam, dets, vid, reid_of.get((vid, cam))))
+              for cam, dets in cams]
         for vid, cams in index.items()
     }
 
@@ -414,16 +465,43 @@ def main() -> None:
             rows_train, rows_val = build_edges_from_candidates(tl_index, args.seed)
         else:
             rows_train, rows_val = build_edges(tl_index, args.neg_ratio, args.seed)
-        cache_p.write_text(json.dumps(
-            {"train": rows_train, "val": rows_val,
-             "max_identities": args.max_identities, "neg_ratio": args.neg_ratio,
-             "seed": args.seed, "negatives_from_candidates": args.negatives_from_candidates,
-             "feature_names": FEATURE_NAMES},
-            ensure_ascii=False), encoding="utf-8")
-        logger.info("构边缓存已写出: %s", cache_p.name)
+        if not rows_train:
+            # **不要把空结果写进缓存** —— 2026-09-21 踩到：初版无条件写缓存，
+            # 一次因缺少外观向量而"0 条边"的失败运行把空结果落盘，
+            # 之后每次重跑都命中这个空缓存、每次都以同样的方式失败，
+            # 看起来像"构边就是产不出边"，掩盖了真正的原因。
+            logger.error("构边产出为空，**不写缓存**（避免把失败结果固化下来）")
+        else:
+            cache_p.write_text(json.dumps(
+                {"train": rows_train, "val": rows_val,
+                 "max_identities": args.max_identities, "neg_ratio": args.neg_ratio,
+                 "seed": args.seed, "negatives_from_candidates": args.negatives_from_candidates,
+                 "feature_names": FEATURE_NAMES},
+                ensure_ascii=False), encoding="utf-8")
+            logger.info("构边缓存已写出: %s", cache_p.name)
 
     if not rows_train:
         sys.exit("[fatal] 没有构造出任何边")
+
+    # ── 护栏：正样本太少时 AUC 没有意义 ──
+    #
+    # 2026-09-21 踩到。用生产候选边做负采样时（--negatives-from-candidates），
+    # 实测只产出 534 条边、其中正边 13 条（验证集里约 3 条），训练出
+    # **val AUC = 1.0000**。这个 1.0 不是"完美"，是**退化的**：3 个正样本
+    # 恰好排在 104 个负样本前面而已，换一批样本就会剧烈波动。
+    #
+    # 不加护栏的话，日志里那行 `val AUC=1.0000` 会被当成"学习型打分器完胜
+    # 手写权重"的证据，而事实恰恰相反 —— 它说明候选边分布极度不平衡。
+    n_val_pos = sum(1 for r in rows_val if r["label"] == 1)
+    n_val_neg = len(rows_val) - n_val_pos
+    n_tr_pos = sum(1 for r in rows_train if r["label"] == 1)
+    degenerate = n_val_pos < 20 or n_val_neg < 20
+    if degenerate:
+        logger.error(
+            "⚠️ 验证边严重不平衡：正 %d / 负 %d（训练 正 %d / 负 %d）—— "
+            "**此条件下的 AUC / acc 不可解释**，AUC=1.0 只说明正样本恰好排前面，"
+            "不代表模型可用。读数前请先看这里。",
+            n_val_pos, n_val_neg, n_tr_pos, len(rows_train) - n_tr_pos)
 
     model, log = train(rows_train, rows_val, args)
 
@@ -493,6 +571,13 @@ def main() -> None:
         "manual_weights_for_reference": manual,
         "final": log[-1] if log else None,
         "constant_dimensions": const_dims,
+        "class_balance": {
+            "train_positive": n_tr_pos,
+            "train_negative": len(rows_train) - n_tr_pos,
+            "val_positive": n_val_pos,
+            "val_negative": n_val_neg,
+            "degenerate": bool(degenerate),
+        },
         "known_limitation": (
             "**负样本不是生产分布**：负边由随机跨车配对生成，包含跨场景对；"
             "而生产路径 CandidateEdgeGenerator 有空间搜索半径，跨场景对不会成为候选。"
