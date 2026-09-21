@@ -36,9 +36,32 @@ Batch Hard 只在**当前 batch 内部**挖；若 batch 里恰好没有难负样
 1. **只有 215 个身份**（VeRi 575 身份 / MSMT17 1041 身份）。这个量级训出来的嵌入，
    **不要期待公开基准那种 R@1**。
 2. **本数据集禁止商用**（AICity22 许可），产物仅限研究。
-3. 训练/验证集是**逐身份按摄像头切分**的，因此 val 的 Rank-1 衡量的是
-   **跨摄像头泛化**，不是同摄像头内的记忆。
+3. ⚠️ **本脚本打印的 val Rank-1 默认是「同摄像头」口径，不是跨摄像头。**
+   见下方专节。
 """
+
+# ============================================================
+# ⚠️ val Rank-1 的口径：默认是同摄像头，不是跨摄像头
+# ============================================================
+#
+# 2026-09-21 实测更正。本文件此前写着「val 的 Rank-1 衡量的是**跨摄像头泛化**」，
+# **那句话是错的**，且是我自己写下的。
+#
+# 事实：`build_reid_training_set.py` 默认 `--val-cameras-per-id 1`，于是每个身份
+# 在 val 里**只占 1 个摄像头**。实测 215 个身份的分布是 `{1: 215}` —— 无一例外。
+# 因此 `evaluate_rank` 在 val 上做的 query-gallery 配对，**全部来自同一摄像头**，
+# 衡量的是"同摄像头内的外观记忆"，不是跨镜泛化。
+#
+# 这个错误让 20 epoch 训练报出的 `Rank-1 = 0.909` 看起来像跨镜成绩，而同一份
+# 数据上用**真正跨镜**口径（`scripts/eval_cross_camera.py`，全量检测池）测
+# fast-reid 只有 **0.207**。差 4 倍多的落差就是口径差，不是模型差。
+#
+# **要看跨摄像头数字**：用 `scripts/eval_cross_camera.py`，或把验证集重建为
+# 每身份 >= 2 个摄像头（`build_reid_training_set.py --val-cameras-per-id 2`）
+# 后重训。本文件不再宣称 val Rank-1 是跨镜指标。
+#
+# 下面 `_warn_if_val_not_cross_camera()` 会在运行时检查并告警，避免这个口径
+# 再次被静默当成跨镜成绩。
 
 from __future__ import annotations
 
@@ -91,6 +114,33 @@ def parse_args() -> argparse.Namespace:
 # ============================================================
 # 数据
 # ============================================================
+
+
+def _warn_if_val_not_cross_camera(val_records) -> bool:
+    """
+    检查验证集是否真的是「跨摄像头」的，不是就告警
+
+    Returns:
+        True 表示验证集是跨摄像头的（同一身份 >= 2 个摄像头）
+    """
+    cams: dict[str, set] = defaultdict(set)
+    for r in val_records:
+        cams[r["vehicle_id"]].add(r["camera_id"])
+    if not cams:
+        return False
+    multi = sum(1 for v in cams.values() if len(v) >= 2)
+    if multi == 0:
+        logger.warning(
+            "⚠️ 验证集**不是跨摄像头口径**：%d 个身份在 val 里各自只占 1 个摄像头，"
+            "因此下面所有 Rank-1/5/mAP 衡量的都是**同摄像头内的外观记忆**，"
+            "**不能**当作跨镜泛化指标、也**不可**与 eval_cross_camera.py 的数字并列。"
+            "要看跨镜数字请用 `scripts/eval_cross_camera.py`。",
+            len(cams))
+        return False
+    if multi < len(cams):
+        logger.warning("验证集部分身份只有一个摄像头（%d/%d），Rank 指标是混合口径",
+                       len(cams) - multi, len(cams))
+    return True
 
 
 def load_records(dataset_dir: Path, limit_per_id: int = 0):
@@ -320,6 +370,7 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     train_recs, val_recs, label_of = load_records(Path(args.dataset), args.limit_per_id)
+    val_is_cross_camera = _warn_if_val_not_cross_camera(val_recs)
     n_ids = len(label_of)
     logger.info("训练 %d 张 / %d 身份 | 验证 %d 张",
                 len(train_recs), n_ids, len(val_recs))
@@ -452,6 +503,9 @@ def main() -> None:
         "id_loss_weight": id_w,
         "p": args.p, "k": args.k, "margin": args.margin,
         "image_cache_size": args.image_cache_size,
+        # 口径标记：False 表示下面那些 Rank-1/5/mAP 是同摄像头口径，
+        # 不是跨镜泛化。见文件头专节。
+        "val_is_cross_camera": bool(val_is_cross_camera),
         "dataset": str(args.dataset),
         "note": (
             "本数据集仅 215 个身份，指标不可与 VeRi/MSMT17 等公开基准直接比较；"
