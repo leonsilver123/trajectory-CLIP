@@ -33,10 +33,10 @@ if not yolo_model_path.exists():
             shutil.copy(default_path, yolo_model_path)
             print(f"OK YOLOv8x 已保存到: {yolo_model_path}")
         else:
-            print(f"⚠️  YOLOv8x 默认路径不存在: {default_path}")
+            print(f"[!]  YOLOv8x 默认路径不存在: {default_path}")
             print("   请手动下载: https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8x.pt")
     except Exception as e:
-        print(f"❌ 下载 YOLOv8x 失败: {e}")
+        print(f"[FAIL] 下载 YOLOv8x 失败: {e}")
         print("   请手动下载并放到 models/yolov8x.pt")
 else:
     print(f"\n[1/3] OK YOLOv8x 已存在: {yolo_model_path}")
@@ -51,13 +51,13 @@ try:
     # 尝试加载模型
     clip_model_path = MODELS_DIR / "chinese-clip-vit-base-patch16.pt"
     if not clip_model_path.exists():
-        print("   ️  首次使用将自动下载 Chinese-CLIP 模型...")
+        print("   首次使用将自动下载 Chinese-CLIP 模型...")
         print("   (这可能需要几分钟，取决于网络速度)")
         try:
             model, preprocess = load_from_name("ViT-B-16", device="cpu", download_root=str(MODELS_DIR))
             print(f"OK Chinese-CLIP 已保存到: {MODELS_DIR}")
         except Exception as e:
-            print(f"⚠️  自动下载失败: {e}")
+            print(f"[!]  自动下载失败: {e}")
             print("   请手动下载 Chinese-CLIP 模型")
     else:
         print(f"OK Chinese-CLIP 模型已存在")
@@ -72,7 +72,7 @@ try:
     import faiss
     print("OK FAISS 已安装")
 except ImportError:
-    print("❌ FAISS 未安装")
+    print("[FAIL] FAISS 未安装")
     print("   请运行: pip install faiss-cpu  (CPU版本)")
     print("   或: pip install faiss-gpu  (GPU版本)")
 
@@ -109,19 +109,19 @@ if yolo_model_path.exists():
                     cls_id = int(box.cls[0].item())
                     print(f"   [{i+1}] 类别={cls_id}, 置信度={conf:.3f}, 框=[{x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f}]")
             else:
-                print("⚠️  未检测到任何目标")
+                print("[!]  未检测到任何目标")
         else:
-            print("⚠️  未找到测试图片，跳过推理测试")
+            print("[!]  未找到测试图片，跳过推理测试")
             
     except Exception as e:
-        print(f"❌ YOLO 推理测试失败: {e}")
+        print(f"[FAIL] YOLO 推理测试失败: {e}")
         import traceback
         traceback.print_exc()
 else:
-    print("⚠️  YOLOv8x 模型不存在，跳过推理测试")
+    print("[!]  YOLOv8x 模型不存在，跳过推理测试")
 
 print("\n" + "=" * 60)
-print("✨ 模型检查完成！")
+print("模型检查完成！")
 print("=" * 60)
 print("\n下一步:")
 print("1. 如果模型缺失，请手动下载或使用上述脚本自动下载")

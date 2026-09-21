@@ -405,7 +405,7 @@ def run_demo() -> None:
     print(f"  结果 JSON: {_RESULTS_JSON}")
     print("=" * 60)
     print()
-    print("✔ 演示完成！可以启动前端查看真实检测结果：")
+    print("[OK] 演示完成！可以启动前端查看真实检测结果：")
     print(f"  streamlit run {_PROJECT_ROOT / 'frontend' / 'app.py'}")
     print()
 

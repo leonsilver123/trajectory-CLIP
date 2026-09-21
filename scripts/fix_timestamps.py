@@ -32,7 +32,7 @@ def main():
     results_file = Path("output/cityflow_results.json")
     
     if not results_file.exists():
-        print(f"❌ 文件不存在: {results_file}")
+        print(f"[FAIL] 文件不存在: {results_file}")
         return
     
     print(f" 读取 {results_file}...")
@@ -63,7 +63,7 @@ def main():
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     
-    print("✨ 完成！请重启 API 服务以加载新数据")
+    print("完成！请重启 API 服务以加载新数据")
     print("\n提示:")
     print("1. 停止当前运行的 API 服务 (Ctrl+C)")
     print("2. 重新启动: python scripts/run_server.py")

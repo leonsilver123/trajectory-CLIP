@@ -27,7 +27,7 @@ scripts.eval_retrieval_hit_rate - 文本检索命中率评测（二期 T7-a）
 同时报告 **属性粗筛保留率**（粗筛后是否还剩该车的任何检测）。
 两者分开，是为了区分失败来自「粗筛就把目标滤掉了」还是「精排没把它排进 top-K」。
 
-## ⚠️ 如实标注的口径限制
+## [!] 如实标注的口径限制
 
 - **描述来自模型自己的属性预测**（AICity22 的 GT 只有 bbox 和 ID，没有颜色/车型真值）。
   因此描述与 `_attribute_filter` 的过滤键同源，粗筛**大概率**会保留目标——
@@ -180,7 +180,7 @@ def main() -> int:
     print(f"属性粗筛保留率              = {coarse_kept/valid:.4f}   ({coarse_kept}/{valid})")
     print(f"平均返回候选数              = {sum(candidates_returned)/len(candidates_returned):.2f}")
     print("-" * 72)
-    print("解读：粗筛保留率高而命中率低 ⇒ 瓶颈在精排排序，不在粗筛。")
+    print("解读：粗筛保留率高而命中率低 => 瓶颈在精排排序，不在粗筛。")
 
     if args.json:
         out = Path(args.json)

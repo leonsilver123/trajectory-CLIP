@@ -226,7 +226,7 @@ else:
     print("\n   WARNING 没有有效的轨迹CLIP向量，跳过索引构建")
 
 print("\n" + "=" * 70)
-print("✨ 轨迹数据修复完成！")
+print("轨迹数据修复完成！")
 print("=" * 70)
 print(f"\n改进效果:")
 print(f"  - 轨迹总数: {len(tracks)} → {len(updated_tracks)}")

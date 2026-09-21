@@ -48,7 +48,18 @@ _LOG_LEVELS = {"debug", "info", "warning", "error", "critical", "exception"}
 
 
 def _iter_log_string_args():
-    """遍历所有 logger.<level>(...) 调用里的字符串字面量参数"""
+    """
+    遍历 `logger.<level>(...)` 与 `print(...)` 调用里的字符串字面量参数
+
+    ⚠️ **`print` 必须一并覆盖。** 2026-09-21 的教训：本测试最初只扫 `logger.*`，
+    结果 `scripts/eval_retrieval_hit_rate.py` 在**最后一行解读文字**里用了 `⇒`
+    (U+21D2)，把整个评测脚本崩在收尾处 —— 表格已经打完了，却因为一行提示
+    以非零码退出、JSON 也没写成。`print` 和 `logger` 走的是同一个 GBK 控制台，
+    没有理由只查一个。
+
+    用 ast 解析而非文本 grep：文本扫描会漏掉**跨行**的调用，而踩到的两处
+    护栏消息恰好都是跨行写法。
+    """
     for d in _SCAN_DIRS:
         base = ROOT / d
         if not base.exists():
@@ -62,12 +73,14 @@ def _iter_log_string_args():
                 if not isinstance(node, ast.Call):
                     continue
                 fn = node.func
-                if not (
+                is_log = (
                     isinstance(fn, ast.Attribute)
                     and isinstance(fn.value, ast.Name)
                     and fn.value.id == "logger"
                     and fn.attr in _LOG_LEVELS
-                ):
+                )
+                is_print = isinstance(fn, ast.Name) and fn.id == "print"
+                if not (is_log or is_print):
                     continue
                 for arg in node.args:
                     if isinstance(arg, ast.Constant) and isinstance(arg.value, str):

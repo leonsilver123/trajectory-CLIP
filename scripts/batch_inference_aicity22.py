@@ -233,7 +233,7 @@ else:
     print("\n   WARNING 没有有效的CLIP向量，跳过索引构建")
 
 print("\n" + "=" * 70)
-print("✨ 批量推理完成！")
+print("批量推理完成！")
 print("=" * 70)
 print(f"\n改进效果:")
 print(f"  - unknown比例: {unknown_count/len(detections)*100:.1f}% → {unknown_new/len(valid_detections)*100:.1f}%")
