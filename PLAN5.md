@@ -120,7 +120,7 @@
 - `[x]` **C3** Hard Negative Mining
   - 在每个 epoch 后用当前模型挖难负样本，重训
   - **验收**：与 C2 不开挖掘的版本做对照，如实报告增益或**负增益**
-- `[~]` **C4** BCE + Ranking Loss 训练边评分器 `scripts/train_edge_scorer.py`
+- `[x]` **C4** BCE + Ranking Loss 训练边评分器 `scripts/train_edge_scorer.py`（**实现完成，但训练结果是负结果**，见变更记录）
   - 从 GT `vehicle_id` 构造正负边（同车=正、异车=负）；BCE + ranking 联合
   - **验收**：训练后在 val 边上算 AUC/准确率；与"网格搜索权重"版本在 IDF1 上对照
 

@@ -141,6 +141,29 @@ These are not comparable and must never be presented as one set. When writing do
 
 This rule predates this file (it is PLAN2's red line) and is the reason several modules in this repo ship with a documented negative result instead of a tuned-up number.
 
+**The AICity22 numbers, for reference** (measured 2026-09-21, all scripts exit 0):
+
+| Evaluation | Script | Metric | Value |
+|---|---|---|---|
+| Text retrieval | `eval_retrieval_hit_rate.py` | hit-rate@20 / MRR | 0.4220 / 0.1111 |
+| Cross-camera chain | `eval_chain_idf1.py` | IDF1 (micro / macro) | 0.5604 / 0.5142 |
+| | | IDP / IDR | **0.9731 / 0.3935** |
+| | | camera exact match | 0.0000 (0/218) |
+| Global clustering | `eval_global_idf1.py` | official IDF1 | 0.4873 |
+| Attribute consistency | `eval_attribute_consistency.py` | cross-camera (type / colour) | 28.4% / 37.2% |
+
+### 🔴 The stitching gates are tuned for precision and starve recall
+
+This is the single most important thing to know before "improving" stitching on this dataset, and **three independent measurements agree on it**:
+
+1. **Direct measurement**: the mean cross-camera ReID cosine between same-vehicle tracklets has **median 0.780** (p90 0.888, max 0.975). The appearance gate `stitching.min_appearance_score` is **0.95** ⇒ only **0.9% of true links can pass it**. (≥0.85 passes 21.6%, ≥0.80 41.4%, ≥0.75 61.8%.)
+2. **`eval_chain_idf1.py`**: IDP **0.973** vs IDR **0.394** — the fingerprint of a precision-tuned gate. Per vehicle, most have GT spanning 8–24 cameras and match **exactly 1**.
+3. **`eval_global_idf1.py`**: 926 tracklets yield only **154 candidate edges**, collapsing to 868 clusters — 58 merges. The gates produce too few edges for clustering to do anything.
+
+Root cause chain: cross-camera ReID is weak here (d-prime 0.78; fast-reid Rank-1 0.207 measured by `eval_cross_camera.py`) → same-vehicle cross-camera cosine is typically ~0.78 → a 0.95 gate rejects almost everything. The threshold's recorded justification ("0.95 → precision 0.97") is **confirmed on the precision side** (0.973) — but its recall cost had never been measured. It is 0.394.
+
+**Do not "fix" this by lowering the threshold as a drive-by change.** Lowering it to 0.75 would admit 61.8% of true links, but that trades precision for recall and changes documented online behaviour — it is the project owner's call, not a side effect of another task.
+
 ## Conventions
 
 - Docstrings and comments are in **Chinese**; identifiers, module names, and log messages are in English.
