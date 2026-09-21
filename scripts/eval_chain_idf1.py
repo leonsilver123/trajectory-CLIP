@@ -38,7 +38,7 @@ scripts.eval_chain_idf1 - 跨镜观测链 IDF1 评测（二期 T7-b）
 摄像头内的 ID switch 不在评测范围内。真实 MTMC 场景没有这个先验。
 → 因此本指标是「跨镜**关联**」能力，**不是**端到端 MTMC 能力，不可与 AICity22 榜单直接比。
 
-（原以为「候选池按场景圈定 ⇒ 跨场景车辆有天花板」也是一项限制，实测**不成立**：
+（原以为「候选池按场景圈定 => 跨场景车辆有天花板」也是一项限制，实测**不成立**：
 218 辆多摄像头车辆**全部**单场景（0/218 跨场景），AICity22 的 MTMC 本就在场景内定义。
 该因素已删除。）
 
@@ -236,7 +236,7 @@ def main() -> int:
     print(f"  平均摄像头精度 (Camera Precision)= {cam_prec_sum/n_cam_vehicles:.4f}" if n_cam_vehicles else "")
     print("-" * 72)
     print(f"跨场景出现的车辆 = {cross_scene_vehicles}/{n_cam_vehicles}"
-          f"（实测为 0 ⇒ 候选池按场景圈定**不构成**限制，AICity22 的 MTMC 本身在场景内定义）")
+          f"（实测为 0 => 候选池按场景圈定**不构成**限制，AICity22 的 MTMC 本身在场景内定义）")
     print(f"构建失败（无轨迹）的车辆数 = {len(failures)}")
 
     # ---- 链扩展诊断：链长 vs GT 摄像头数 ----

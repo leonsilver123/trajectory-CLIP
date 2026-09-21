@@ -40,7 +40,7 @@ def main():
         data = json.load(f)
     
     detections = data.get('detections', [])
-    print(f"📊 共 {len(detections)} 条检测记录")
+    print(f"共 {len(detections)} 条检测记录")
     
     # 统计需要更新的记录数
     updated_count = 0
@@ -56,10 +56,10 @@ def main():
                 det['timestamp'] = new_timestamp
                 updated_count += 1
     
-    print(f"✅ 更新了 {updated_count}/{len(detections)} 条记录的时间戳")
+    print(f"[OK] 更新了 {updated_count}/{len(detections)} 条记录的时间戳")
     
     # 保存回文件
-    print(f"💾 保存回 {results_file}...")
+    print(f"保存回 {results_file}...")
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     

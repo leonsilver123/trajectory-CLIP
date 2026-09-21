@@ -83,8 +83,26 @@ def _iter_log_string_args():
                 if not (is_log or is_print):
                     continue
                 for arg in node.args:
-                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                        yield py, node.lineno, arg.value
+                    yield from _string_parts(py, node.lineno, arg)
+
+
+def _string_parts(py, lineno, node):
+    """
+    从一个参数节点里抽字符串字面量，**f-string 也要抽**
+
+    ⚠️ f-string 在 AST 里是 `ast.JoinedStr`（`values` 里既有 `Constant` 文本段、
+    也有 `FormattedValue` 表达式），**不是** `ast.Constant`。
+    2026-09-21 第二次踩到：扫描器最初只认 `ast.Constant`，于是**所有 f-string
+    里的禁用字符全部漏检** —— `eval_chain_idf1.py` 的
+    `f"...实测为 0 ⇒ ..."` 就是被漏掉的那一类，脚本崩在收尾处。
+    f-string 恰恰是 print 里最常见的写法，漏掉它等于没扫。
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        yield py, lineno, node.value
+    elif isinstance(node, ast.JoinedStr):
+        for part in node.values:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                yield py, lineno, part.value
 
 
 def test_no_unencodable_chars_in_log_messages():
