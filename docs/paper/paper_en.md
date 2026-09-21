@@ -308,6 +308,12 @@ The dataset contains 12,847 vehicle tracklets and 8,392 pedestrian tracklets acr
 
 The full scoring method achieves the best F1-score for both vehicles (0.819) and pedestrians (0.715). Adding penalty terms slightly improves precision at the cost of recall, resulting in a marginal F1 decrease but producing more reliable chains. The traffic constraints (temporal + spatial) provide substantial improvement over appearance-only methods, confirming the value of domain-specific knowledge.
 
+> **Note on the provenance of Table 2.** The figures in Table 2 come from the **business dataset (Xiangcheng District, Suzhou; 48 roads)** — the environment in which the system is actually deployed. That dataset is **not included in the code repository released with this paper**, so these numbers cannot be reproduced from the repository data.
+>
+> The dataset that *is* reproducible from the repository is **AICity22** (68,349 detections / 230 vehicle identities / 46 cameras). It differs substantially from the Table 2 data in scale and imaging conditions, and the two sets of numbers **must not be interchanged or compared directly**. Measured results on AICity22 are typically much lower, and the cause lies mostly in the data rather than the algorithm: crop median size is only **118×98 px**, the cross-camera ReID d-prime is just **0.78**, and the dataset contains **no license-plate annotations at all** (so the plate-agreement dimension of the six-term score is permanently evidence-free and is dropped entirely).
+>
+> Note also that the implementation details in Section 5.1 describe the **design spec**. The deployed code uses Chinese-CLIP **ViT-B-16 (512-dim)**, not ViT-L-14 (768-dim), and stores data in Parquet + SQLite + FAISS rather than Qdrant. Where the two differ, the repository code is authoritative.
+
 ### 5.3 Text Retrieval Performance
 
 **Table 3: Text retrieval performance across query types.**
