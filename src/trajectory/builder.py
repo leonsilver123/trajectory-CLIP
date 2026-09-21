@@ -135,59 +135,28 @@ class TrajectoryDataUnavailableError(Exception):
 
 class BoundedCrossCameraScorer(CrossCameraScorer):
     """
-    六维评分器（有界路径计数版本）
+    六维评分器（保留的历史类名，现已无行为差异）
+
+    ## 它曾经解决的问题
 
     上游 `_count_possible_paths` 用无深度上限的 DFS 枚举简单路径，在本项目
     46 摄像头 / 91 条邻接边的拓扑上会组合爆炸：**实测单对摄像头耗时 4–23 秒**
     （c001→c002 23.2s、c003→c004 12.1s、c004→c005 4.2s），线上每对摄像头都
     调用一次，接口会直接超时。
 
-    这里只覆盖路径计数一个方法：语义保持一致（返回不同路径数，上限 5；
-    不可达或不在邻接表中返回 1），但加上「最大跳数」与「扩展预算」两个上限。
-    在本拓扑上实测与上游返回相同的值（c001/c002/c003/c004/c005 之间均为 5），
-    耗时从秒级降到 0.1 毫秒级。
+    当时的处理是**在子类里覆盖这一个方法**绕开它 —— 但这只救了走 builder 的
+    那条路：任何直接用 `CrossCameraScorer` 的代码依然会撞上爆炸。
+
+    ## 现状（2026-09-21 修复）
+
+    有界实现已**下沉到基类** `src/stitching/scoring.CrossCameraScorer`，
+    基类自己就带 `MAX_PATH_HOPS` / `PATH_EXPANSION_BUDGET` 两个上限
+    （实测另一对 c029→c030 单次 3,486,156 次递归、1.84 秒，同样被修掉）。
+    因此本类不再覆盖任何方法，保留类名只为兼容既有引用与类型标注。
 
     其余全部评分维度（外观/属性/车牌/时间/空间/方向、加权求和、惩罚项）
-    仍由 `src.stitching.scoring.CrossCameraScorer` 提供，未做改动。
+    一直由 `src.stitching.scoring.CrossCameraScorer` 提供，未做改动。
     """
-
-    # 最大跳数：超过 6 跳的绕行不计入"可能路径数"
-    MAX_HOPS = 6
-    # 扩展预算：兜底上限，防止异常拓扑再次爆炸
-    EXPANSION_BUDGET = 20000
-
-    def _count_possible_paths(self, src_camera_id: str, tgt_camera_id: str) -> int:
-        """有界版本的路径计数（覆盖上游实现，语义一致）"""
-        try:
-            adjacency = self.road_topology._adjacency
-        except AttributeError:
-            return 1
-
-        if src_camera_id not in adjacency or tgt_camera_id not in adjacency:
-            return 1
-
-        max_paths = 5
-        found = 0
-        budget = self.EXPANSION_BUDGET
-        # (当前节点, 已访问集合, 已走跳数)
-        stack: List[Tuple[str, set, int]] = [(src_camera_id, {src_camera_id}, 0)]
-
-        while stack and found < max_paths and budget > 0:
-            current, visited, depth = stack.pop()
-            budget -= 1
-            if depth >= self.MAX_HOPS:
-                continue
-            for neighbor in adjacency.get(current, []):
-                if neighbor in visited:
-                    continue
-                if neighbor == tgt_camera_id:
-                    found += 1
-                    if found >= max_paths:
-                        break
-                else:
-                    stack.append((neighbor, visited | {neighbor}, depth + 1))
-
-        return max(found, 1)
 
 
 # ============================================================

@@ -1023,20 +1023,88 @@ class CrossCameraScorer:
 
         return None
 
+    # 路径计数的两个上限（2026-09-21 加，见 `_count_possible_paths` 的说明）
+    #
+    # 这两个常量原先只存在于 `src/trajectory/builder.py` 的
+    # `BoundedCrossCameraScorer` 子类里 —— 也就是说**基类一直是坏的**，
+    # 只有走 builder 的那条路绕开了它。任何直接用 `CrossCameraScorer` 的代码
+    # （如 `scripts/train_edge_scorer.py` 的构边）仍会撞上组合爆炸。
+    # 现已下沉到基类，子类保留为兼容别名。
+    MAX_PATH_HOPS = 6          # 超过 6 跳的绕行不计入"可能路径数"
+    PATH_EXPANSION_BUDGET = 20000   # 兜底上限，防异常拓扑再次爆炸
+
     def _count_possible_paths(
         self, src_camera_id: str, tgt_camera_id: str
     ) -> int:
         """
-        计算两个摄像头之间可能的路径数量
+        计算两个摄像头之间可能的路径数量（有界枚举，最多 5 条）
 
-        使用 BFS 枚举所有简单路径 (最多搜索 5 条)。
+        ## 为什么必须「有界」
+
+        这个函数的语义是"数一数有几条路可走"，用来算路径分叉惩罚
+        （`penalty = 1 - 1/num_paths`）。但简单路径的数量在图上是**指数级**的，
+        而原来的写法只限制了**计数**（`paths_found < max_paths`），
+        没有限制**搜索**：
+
+            while stack and paths_found < max_paths:   # ← 只挡计数
+                for neighbor in adj.get(current, []):  # ← 搜索无界
+                    stack.append(...)
+
+        当两点之间**根本不可达**（或只有很长的绕行）时，`paths_found` 永远是 0，
+        循环条件恒真，DFS 会把整棵指数级的简单路径树走完。
+
+        **实测**（46 摄像头 / 91 条邻接边）：单对摄像头 3,486,156 次递归调用、
+        耗时 1.84 秒（c029→c030）；builder 侧的记录更早测到 c001→c002 达 23.2 秒。
+        而候选边生成时**每一对都要调它一次** ⇒ 直接超时。
+
+        ## 影响范围（别把这条说过头）
+
+        **生产路径此前是有保护的**：`TrajectoryBuilder._scene_edge_pool` 构造
+        `CandidateEdgeGenerator` 时显式传了 `scorer=self._get_scorer()`
+        （返回 `BoundedCrossCameraScorer`），所以线上走的是子类的有界实现。
+
+        真正暴露的是**直接用基类的代码** —— `CandidateEdgeGenerator` 在不传
+        `scorer` 时会自己 `CrossCameraScorer(...)`（`candidate_edge.py:114`），
+        以及 `scripts/train_edge_scorer.py` 这类直接实例化基类的脚本。
+        本次把上限下沉到基类，**不改变任何线上行为**，只是把地雷拆掉。
+
+        **修复**：加两个上限 —— `MAX_PATH_HOPS`（超过 6 跳的路径不计入）与
+        `PATH_EXPANSION_BUDGET`（兜底预算）。修复后单对耗时降到亚毫秒。
+
+        ## ⚠️ 这**不是**纯粹的等价重构 —— 返回值会变（已实测，别覆盖这条）
+
+        我最初按"等价重构"来写，实测后发现**不等价**。在本拓扑（46 摄像头 /
+        1035 对）上逐对比对：
+
+        | 结果 | 对数 |
+        |---|---|
+        | 旧实现能终止、可参与比对 | 709 |
+        | 其中**返回值不同** | **278（39.2%）** |
+        | 旧实现组合爆炸、根本给不出值 | 326 |
+
+        差异集中在 `(旧 5, 新 1)` 共 229 对 —— 即旧版数出了 ≥5 条**超过 6 跳**的
+        绕行，新版不再计入。对 `path_divergence_penalty = 1 - 1/num_paths` 的影响：
+        最大 **0.80**、平均 0.27，乘惩罚权重 0.1 后对总分影响最大 **0.08**。
+
+        **为什么接受这个语义变化**：系统自己的可达性假设就是 ≤6 跳
+        （`is_reachable` 与 builder 侧 `MAX_HOPS`），把 9 跳绕行算作"同一辆车
+        可能走的路线"本来就可疑 —— 新版数的是**合理路径**，不是图论意义上的
+        全部简单路径。且**线上路径早已在用这个语义**（builder 一直在用
+        `BoundedCrossCameraScorer`），所以本次改动让基类与线上口径**趋于一致**，
+        而不是引入新的偏离。
+
+        **为什么不能做成精确版**：曾尝试"反向可达性剪枝 + 压入即计数"来保住
+        精确语义，实测能把可比对的对数从 709 提到 814 且**零差异**，但 221 对
+        仍然爆炸（最坏 c011→c040 需 195 万次扩展）。简单路径计数是 #P-hard，
+        指数下界绕不过去。因此**有界近似是唯一可行的选择**，代价就是把上面
+        这张差异表如实写在这里。
 
         Args:
             src_camera_id: 源摄像头 ID
             tgt_camera_id: 目标摄像头 ID
 
         Returns:
-            可能路径数量 (上限 5)
+            可能路径数量 (上限 5；不可达或不在邻接表中返回 1)
         """
         max_paths = 5
         try:
@@ -1047,20 +1115,27 @@ class CrossCameraScorer:
         if src_camera_id not in adj or tgt_camera_id not in adj:
             return 1
 
-        # BFS 枚举简单路径
-        paths_found = 0
-        stack = [(src_camera_id, {src_camera_id})]
-        while stack and paths_found < max_paths:
-            current, visited = stack.pop()
-            if current == tgt_camera_id:
-                paths_found += 1
+        found = 0
+        budget = self.PATH_EXPANSION_BUDGET
+        # (当前节点, 已访问集合, 已走跳数)
+        stack: List[Tuple[str, set, int]] = [(src_camera_id, {src_camera_id}, 0)]
+
+        while stack and found < max_paths and budget > 0:
+            current, visited, depth = stack.pop()
+            budget -= 1
+            if depth >= self.MAX_PATH_HOPS:
                 continue
             for neighbor in adj.get(current, []):
-                if neighbor not in visited:
-                    new_visited = visited | {neighbor}
-                    stack.append((neighbor, new_visited))
+                if neighbor in visited:
+                    continue
+                if neighbor == tgt_camera_id:
+                    found += 1
+                    if found >= max_paths:
+                        break
+                else:
+                    stack.append((neighbor, visited | {neighbor}, depth + 1))
 
-        return max(paths_found, 1)
+        return max(found, 1)
 
     def _count_intermediate_cameras(
         self, src_camera_id: str, tgt_camera_id: str
