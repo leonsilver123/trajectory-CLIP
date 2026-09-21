@@ -382,11 +382,13 @@ def main() -> None:
             if id_w > 0:
                 loss_id = ce(out, labels)
                 loss = loss + id_w * loss_id
-                ep_id += float(loss_id)
+                # 用 .item() 而非 float()：loss_id 带梯度，直接 float() 会触发
+                # "Converting a tensor with requires_grad=True to a scalar" 警告
+                ep_id += loss_id.item()
             loss.backward()
             optimizer.step()
 
-            ep_tri += float(loss_t)
+            ep_tri += loss_t.item()
             nb += 1
 
         scheduler.step()
